@@ -455,7 +455,8 @@ def _extract_css_schema(html: str, schema: dict[str, Any]) -> list[dict[str, Any
             name = f.get("name", f.get("selector", "?"))
             sel = f.get("selector")
             try:
-                el_list = item.css(sel) if sel else []
+                # Missing/empty selector = the base element itself
+                el_list = list(item.css(sel)) if sel else [item]
             except Exception:  # noqa: BLE001
                 el_list = []
             el = el_list[0] if el_list else None
@@ -465,12 +466,18 @@ def _extract_css_schema(html: str, schema: dict[str, Any]) -> list[dict[str, Any
             ftype = f.get("type", "text")
             if ftype == "attribute":
                 row[name] = el.attrib.get(f.get("attribute", "href"))
-            elif ftype == "text":
-                row[name] = (el.text or "").strip()
-            elif ftype == "html":
-                row[name] = el.html_content or ""
+            elif ftype in ("text", "html"):
+                # .text is only the FIRST text node (often whitespace for
+                # nested markup) — collect all descendant text instead.
+                try:
+                    row[name] = el.get_all_text(strip=True) if ftype == "text" else el.html_content
+                except AttributeError:
+                    row[name] = (el.text or "").strip() if ftype == "text" else el.html_content
             else:
-                row[name] = (el.text or "").strip()
+                try:
+                    row[name] = el.get_all_text(strip=True)
+                except AttributeError:
+                    row[name] = (el.text or "").strip()
         out.append(row)
     return out
 
