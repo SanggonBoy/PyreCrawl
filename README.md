@@ -210,11 +210,33 @@ a complete, LLM-ready result:
 | Static HTML page | ✅ ~200ms | — | — |
 | Cloudflare-protected | ❌ | ✅ Turnstile solver | — |
 | JS-heavy SPA | ❌ | ✅ real Chromium | — |
+| Live DOM data (input `.value`, JS state) | ❌ | ✅ `js` param | — |
 | LLM-ready markdown + citations | — | — | ✅ BM25, fit-markdown |
 | Structured extraction (CSS schema) | — | — | ✅ |
 | Deep crawl (BFS/DFS/BestFirst) | — | — | ✅ adaptive |
 
 The agent never has to pick. `prefer="auto"` does it every call.
+
+### Live DOM data with `js` and `wait_for`
+
+Some sites keep the data you want in a DOM *property* (e.g. an `<input>`'s `.value`)
+that JS writes after an XHR — it never appears in the serialized HTML. The
+`scrape` tool accepts two stealth-tier params for exactly this:
+
+```json
+{
+  "url": "https://temp-mail.org/id",
+  "prefer": "stealth",
+  "wait_for": "document.getElementById('mail').value.includes('@')",
+  "js": "document.getElementById('mail').value"
+}
+```
+
+- `wait_for` — a JS **predicate expression** polled until truthy (bounded by `timeout`).
+  Use it instead of guessing a sleep for anything that arrives asynchronously.
+- `js` — a JS **expression** evaluated once the page settles; the value comes back
+  in `meta.js_result`. Errors are captured in `meta.js_error` (the page result is
+  still returned, never a crash).
 
 ---
 
