@@ -1,0 +1,29 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.SanggonBoy/PyreCrawl",
+  "title": "PyreCrawl",
+  "description": "One tool for AI agents to scrape, crawl, extract, map, and search the web. Self-hosted, no API keys.",
+  "version": "0.2.1",
+  "repository": {
+    "url": "https://github.com/SanggonBoy/PyreCrawl",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/SanggonBoy/PyreCrawl",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "pyrecrawl",
+      "version": "0.2.1",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "valueHint": "serve"
+        }
+      ]
+    }
+  ]
+}

@@ -285,3 +285,5 @@ MIT — see [LICENSE](LICENSE).
 
 Built on the shoulders of [Scrapling](https://github.com/D4Vinci/Scrapling) and
 [Crawl4AI](https://github.com/unclecode/crawl4ai) — both MIT, both excellent.
+
+<!-- mcp-name: io.github.SanggonBoy/PyreCrawl -->
