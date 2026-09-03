@@ -157,8 +157,8 @@ python scripts/probe_stdio.py # stdio JSON-RPC probe
 Maintainers only:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
 GitHub Actions builds + uploads to PyPI via [trusted publishing](https://docs.pypi.org/trusted-publishers/).

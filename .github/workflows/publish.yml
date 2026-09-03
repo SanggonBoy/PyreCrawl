@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  contents: read   # checkout@v4 needs this; partial permissions block = everything else none
   id-token: write  # PyPI trusted publishing (OIDC)
 
 jobs:
@@ -13,11 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-      - run: uv python install 3.12
-      - run: uv venv
-      - run: uv pip install build
-      - run: python -m build
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build  # sdist + wheel into dist/ via isolated hatchling env
       - uses: actions/upload-artifact@v4
         with:
           name: dist
