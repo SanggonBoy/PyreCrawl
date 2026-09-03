@@ -88,15 +88,113 @@ The tools appear as `mcp_pyrecrawl_scrape`, `mcp_pyrecrawl_extract`, `mcp_pyrecr
 
 ## 📚 Manual config (if `pyrecrawl install` doesn't match your setup)
 
-| Agent | Config file | Entry |
-|---|---|---|
-| **Claude Desktop** | `~/.config/Claude/claude_desktop_config.json` (Linux) / `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) / `%AppData%\Claude\claude_desktop_config.json` (Windows) | `{"mcpServers":{"pyrecrawl":{"command":"uvx","args":["--from","pyrecrawl","pyrecrawl","serve"]}}}` |
-| **Claude Code** | project-scoped `.mcp.json` | same JSON as Claude Desktop |
-| **Cursor** | `~/.cursor/mcp.json` | same JSON |
-| **VS Code / Copilot** | `.vscode/mcp.json` (project) | `{"servers":{"pyrecrawl":{"command":"uvx","args":["--from","pyrecrawl","pyrecrawl","serve"],"type":"stdio"}}}` |
-| **Codex CLI** | `~/.codex/config.toml` | `[mcp_servers.pyrecrawl]\ncommand = "uvx"\nargs = ["--from", "pyrecrawl", "pyrecrawl", "serve"]` |
-| **OpenCode** | `~/.config/opencode/opencode.json` | `{"mcp":{"pyrecrawl":{"type":"local","command":["uvx","--from","pyrecrawl","pyrecrawl","serve"],"enabled":true}}}` |
-| **Hermes** | `~/.hermes/config.yaml` or `%LocalAppData%\hermes\config.yaml` | `mcp_servers:\n  pyrecrawl:\n    command: uvx\n    args:\n      - --from\n      - pyrecrawl\n      - pyrecrawl\n      - serve\n    enabled: true` |
+### Claude Desktop
+
+**Config file**
+- Linux: `~/.config/Claude/claude_desktop_config.json`
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%AppData%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "pyrecrawl": {
+      "command": "uvx",
+      "args": ["--from", "pyrecrawl", "pyrecrawl", "serve"]
+    }
+  }
+}
+```
+
+### Claude Code
+
+**Config file**: project-scoped `.mcp.json`
+
+```json
+{
+  "mcpServers": {
+    "pyrecrawl": {
+      "command": "uvx",
+      "args": ["--from", "pyrecrawl", "pyrecrawl", "serve"]
+    }
+  }
+}
+```
+
+### Cursor
+
+**Config file**: `~/.cursor/mcp.json`
+
+```json
+{
+  "mcpServers": {
+    "pyrecrawl": {
+      "command": "uvx",
+      "args": ["--from", "pyrecrawl", "pyrecrawl", "serve"]
+    }
+  }
+}
+```
+
+### VS Code / Copilot
+
+**Config file**: `.vscode/mcp.json` (project-scoped)
+
+```json
+{
+  "servers": {
+    "pyrecrawl": {
+      "command": "uvx",
+      "args": ["--from", "pyrecrawl", "pyrecrawl", "serve"],
+      "type": "stdio"
+    }
+  }
+}
+```
+
+### Codex CLI
+
+**Config file**: `~/.codex/config.toml`
+
+```toml
+[mcp_servers.pyrecrawl]
+command = "uvx"
+args = ["--from", "pyrecrawl", "pyrecrawl", "serve"]
+```
+
+### OpenCode
+
+**Config file**: `~/.config/opencode/opencode.json`
+
+```json
+{
+  "mcp": {
+    "pyrecrawl": {
+      "type": "local",
+      "command": ["uvx", "--from", "pyrecrawl", "pyrecrawl", "serve"],
+      "enabled": true
+    }
+  }
+}
+```
+
+### Hermes
+
+**Config file**
+- Linux/macOS: `~/.hermes/config.yaml`
+- Windows: `%LocalAppData%\hermes\config.yaml`
+
+```yaml
+mcp_servers:
+  pyrecrawl:
+    command: uvx
+    args:
+      - --from
+      - pyrecrawl
+      - pyrecrawl
+      - serve
+    enabled: true
+```
 
 > **Windows note:** `uvx` must be on PATH. If not, use the full path to `uvx.exe` (e.g. `C:\Users\<you>\AppData\Local\hermes\bin\uvx.exe`).
 
