@@ -70,6 +70,13 @@ _ASYNC_RUNNER_HINT = (
 )
 
 
+_SCRIPT_RE = re.compile(r"<script\b[^>]*>.*?</script\s*>", re.DOTALL | re.IGNORECASE)
+_STYLE_RE = re.compile(r"<style\b[^>]*>.*?</style\s*>", re.DOTALL | re.IGNORECASE)
+_NOSCRIPT_RE = re.compile(r"<noscript\b[^>]*>.*?</noscript\s*>", re.DOTALL | re.IGNORECASE)
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+
+
 def _looks_like_cloudflare_block(html: str, status: int) -> bool:
     if status in (403, 503):
         return True
@@ -85,6 +92,29 @@ def _looks_like_cloudflare_block(html: str, status: int) -> bool:
 
 def _looks_like_block(html: str, status: int) -> bool:
     return status >= 400 or _looks_like_cloudflare_block(html, status)
+
+
+def _looks_like_js_skeleton(html: str, status: int) -> bool:
+    """Heuristic: a 200 with a JS-rendered SPA shell, no real content in the body.
+
+    Detected when status is 200 BUT the visible text is pathologically small
+    relative to the HTML payload (i.e. the page is a React/Vue/Angular shell
+    that only renders content client-side). Used by the smart ladder to escalate
+    to the stealth browser instead of returning an empty page.
+    """
+    if status >= 400 or not html:
+        return False
+    # Strip non-visible payload before measuring: SPA shells ship their entire
+    # app (and often the data blob) inside <script>/<style>, which would
+    # otherwise make an empty page look text-rich.
+    body = _SCRIPT_RE.sub(" ", html)
+    body = _STYLE_RE.sub(" ", body)
+    body = _NOSCRIPT_RE.sub(" ", body)
+    body = _TAG_RE.sub(" ", body)
+    text = _WS_RE.sub(" ", body).strip()
+    # Healthy static pages: a few hundred to many thousands of visible chars.
+    # SPA shells: 263 KB of HTML, ~90 chars of actual visible text.
+    return len(html) > 5000 and len(text) < 250
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +352,11 @@ def scrape_smart(url: str, *, prefer: str = "auto", timeout: int = 30) -> FetchR
         fast = scrape_fast(url, timeout=timeout)
         if prefer == "fast":
             return fast
-        if not _looks_like_block(fast.html, fast.status) and len(fast.html) > 500:
+        if (
+            not _looks_like_block(fast.html, fast.status)
+            and not _looks_like_js_skeleton(fast.html, fast.status)
+            and len(fast.html) > 500
+        ):
             return fast
     except Exception as e:  # noqa: BLE001 — wide net for first attempt
         fast_exc = str(e)
