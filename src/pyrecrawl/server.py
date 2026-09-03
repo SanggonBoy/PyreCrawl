@@ -103,6 +103,8 @@ def build_server() -> FastMCP:
         prefer: str = "auto",
         timeout: int = 30,
         include_html: bool = False,
+        js: str | None = None,
+        wait_for: str | None = None,
     ) -> dict[str, Any]:
         """Scrape a single URL → LLM-ready markdown.
 
@@ -115,12 +117,19 @@ def build_server() -> FastMCP:
                     llm = full Crawl4AI browser + BM25 fit-markdown.
             timeout: per-attempt timeout in seconds.
             include_html: include raw HTML in the response (large; off by default).
+            js: (stealth only) JS expression evaluated against the live page
+                after it settles. The value comes back in ``meta.js_result``.
+                Use for data that lives in DOM *properties* (e.g. an input's
+                ``.value``) rather than in serialized HTML.
+            wait_for: (stealth only) JS predicate expression polled until truthy
+                (bounded by ``timeout``). Use to wait for content that arrives
+                asynchronously after ``network_idle``.
         """
         try:
             if prefer == "fast":
                 r = scrape_fast(url, timeout=timeout)
             elif prefer == "stealth":
-                r = scrape_stealth(url, timeout=max(timeout, 60))
+                r = scrape_stealth(url, timeout=max(timeout, 60), js=js, wait_for=wait_for)
             elif prefer == "llm":
                 data = process_llm(url, fit_markdown=True)
                 first = data["results"][0] if data["results"] else {}
@@ -144,7 +153,7 @@ def build_server() -> FastMCP:
                     },
                 }, include_html=include_html)
             else:
-                r = scrape_smart(url, prefer="auto", timeout=timeout)
+                r = scrape_smart(url, prefer="auto", timeout=timeout, js=js, wait_for=wait_for)
             return _scrape_to_dict(r, include_html=include_html)
         except Exception as e:  # noqa: BLE001
             log.exception("scrape failed")

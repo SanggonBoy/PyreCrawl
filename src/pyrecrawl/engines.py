@@ -156,13 +156,48 @@ def scrape_fast(url: str, timeout: int = 30) -> FetchResult:
 # Engine 2 — stealth browser via Scrapling StealthyFetcher (Cloudflare solve)
 # ---------------------------------------------------------------------------
 
-def scrape_stealth(url: str, timeout: int = 60, network_idle: bool = True) -> FetchResult:
-    """Open a real Chromium, optionally solve Cloudflare Turnstile, return content."""
+def scrape_stealth(
+    url: str,
+    timeout: int = 60,
+    network_idle: bool = True,
+    wait_selector: str | None = None,
+    wait: int = 0,
+    js: str | None = None,
+    wait_for: str | None = None,
+) -> FetchResult:
+    """Open a real Chromium, optionally solve Cloudflare Turnstile, return content.
+
+    Args:
+        wait_selector: optional CSS selector to wait for before returning.
+        wait: extra milliseconds to wait after the page settles.
+        js: JavaScript **expression** evaluated against the live page after it
+            settles; the value comes back in ``meta["js_result"]``. Needed for
+            data that lives in DOM *properties* instead of serialized HTML —
+            e.g. ``document.getElementById('mail').value`` on temp-mail, where
+            JS writes the address into the input after an XHR and the attribute
+            in the HTML source still reads ``Memuat``.
+        wait_for: JavaScript **predicate expression** polled until it returns
+            truthy (bounded by ``timeout``). Prefer this over guessing a ``wait``
+            duration for content that arrives asynchronously.
+    """
+    js_box: dict[str, Any] = {}
+
+    def _action(page):
+        # Runs inside the browser thread, after CF solve + page stability.
+        if wait_for:
+            try:
+                page.wait_for_function(f"() => ({wait_for})", timeout=timeout * 1000)
+            except Exception as e:  # noqa: BLE001 — predicate may never flip
+                js_box["wait_for_error"] = str(e)
+        if js:
+            try:
+                js_box["result"] = page.evaluate(f"() => ({js})")
+            except Exception as e:  # noqa: BLE001
+                js_box["error"] = str(e)
 
     def _do_stealth():
         from scrapling.fetchers import StealthyFetcher
-        return StealthyFetcher.fetch(
-            url,
+        kwargs: dict[str, Any] = dict(
             headless=True,
             network_idle=network_idle,
             solve_cloudflare=True,
@@ -170,6 +205,13 @@ def scrape_stealth(url: str, timeout: int = 60, network_idle: bool = True) -> Fe
             block_ads=True,
             disable_resources=True,
         )
+        if wait_selector:
+            kwargs["wait_selector"] = wait_selector
+        if wait:
+            kwargs["wait"] = wait
+        if js or wait_for:
+            kwargs["page_action"] = _action
+        return StealthyFetcher.fetch(url, **kwargs)
 
     import time
     t0 = time.perf_counter()
@@ -185,6 +227,16 @@ def scrape_stealth(url: str, timeout: int = 60, network_idle: bool = True) -> Fe
         md = _html_to_markdown(html)
     title = _extract_title(html)
     elapsed = int((time.perf_counter() - t0) * 1000)
+    meta: dict[str, Any] = {
+        "solved_cloudflare": True,
+        "encoding": resp.encoding,
+    }
+    if js_box.get("result") is not None:
+        meta["js_result"] = js_box["result"]
+    if js_box.get("error"):
+        meta["js_error"] = js_box["error"]
+    if js_box.get("wait_for_error"):
+        meta["wait_for_error"] = js_box["wait_for_error"]
     return FetchResult(
         url=url,
         final_url=resp.url,
@@ -194,7 +246,7 @@ def scrape_stealth(url: str, timeout: int = 60, network_idle: bool = True) -> Fe
         title=title,
         method="scrapling.fetch_stealth",
         elapsed_ms=elapsed,
-        meta={"solved_cloudflare": True, "encoding": resp.encoding},
+        meta=meta,
     )
 
 
@@ -319,13 +371,21 @@ def process_llm(
 # Composite: scrape smart (auto-fallback ladder)
 # ---------------------------------------------------------------------------
 
-def scrape_smart(url: str, *, prefer: str = "auto", timeout: int = 30) -> FetchResult:
+def scrape_smart(
+    url: str,
+    *,
+    prefer: str = "auto",
+    timeout: int = 30,
+    js: str | None = None,
+    wait_for: str | None = None,
+) -> FetchResult:
     """Try fast HTTP -> stealth browser. Return the first good result.
 
     `prefer` can be "auto" | "fast" | "stealth" | "llm".
+    `js` / `wait_for` are forwarded to `scrape_stealth` (ignored for fast/llm).
     """
     if prefer == "stealth":
-        return scrape_stealth(url, timeout=max(timeout, 60))
+        return scrape_stealth(url, timeout=max(timeout, 60), js=js, wait_for=wait_for)
     if prefer == "llm":
         data = process_llm(url, fit_markdown=True)
         first = data["results"][0] if data["results"] else {}
@@ -364,7 +424,7 @@ def scrape_smart(url: str, *, prefer: str = "auto", timeout: int = 30) -> FetchR
         fast_exc = None
 
     # escalate to stealth
-    stealth = scrape_stealth(url, timeout=max(timeout, 60))
+    stealth = scrape_stealth(url, timeout=max(timeout, 60), js=js, wait_for=wait_for)
     if not _looks_like_block(stealth.html, stealth.status):
         if fast_exc:
             stealth.meta["fast_error"] = fast_exc

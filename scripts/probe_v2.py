@@ -158,7 +158,7 @@ def main():
         first = p["data"][0]
         check("extract heading = 'Example Domain'", first.get("heading") == "Example Domain", str(first))
 
-    # 7. extract on real list (Wikipedia vector-toc)
+    # 6.5. extract on real list (Wikipedia vector-toc)
     print("== extract CSS schema on wikipedia ==")
     p = payload_of(rpc("tools/call", {
         "name": "extract",
@@ -169,7 +169,7 @@ def main():
                                   {"name": "href", "selector": "", "type": "attribute", "attribute": "href"}]},
             "prefer": "fast",
         },
-    }, rid, timeout=60)); rid += 1
+    }, rid)); rid += 1
     if "error" not in p:
         check("wiki extract non-empty", isinstance(p.get("data"), list) and len(p["data"]) > 3,
               f"len={len(p.get('data') or [])}")
@@ -179,6 +179,26 @@ def main():
             check("wiki extract has href", bool(first.get("href")), str(first))
     else:
         print(f"  (skip — wikipedia extract failed: {p['error'][:120]})")
+
+    # 6.7. scrape with js param (live DOM property)
+    print("== scrape stealth with js param ==")
+    p = payload_of(rpc("tools/call", {
+        "name": "scrape",
+        "arguments": {
+            "url": "https://example.com",
+            "prefer": "stealth",
+            "timeout": 60,
+            "js": "document.title",
+        },
+    }, rid, timeout=180)); rid += 1
+    if "error" not in p:
+        check("js_result is a string", isinstance((p.get("meta") or {}).get("js_result"), str),
+              str((p.get("meta") or {}).get("js_result")))
+        check("js_result == 'Example Domain'",
+              (p.get("meta") or {}).get("js_result") == "Example Domain",
+              str((p.get("meta") or {}).get("js_result")))
+    else:
+        print(f"  (skip — js param failed: {p['error'][:120]})")
 
     # 8. map_site
     print("== map_site on wikipedia ==")
