@@ -1,0 +1,47 @@
+[project]
+name = "pyrecrawl"
+version = "0.2.1"
+description = "Self-hosted Firecrawl alternative: LLM-ready scraper/crawler MCP server combining Crawl4AI and Scrapling with a smart auto-fallback ladder."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Alexander Jay" },
+]
+keywords = ["mcp", "scraping", "crawl4ai", "scrapling", "firecrawl-alternative", "llm", "rag", "ai-agent", "web-scraping", "ai-agent-tools"]
+requires-python = ">=3.10"
+dependencies = [
+    "crawl4ai>=0.9.0",
+    "scrapling[fetchers]>=0.4.0",
+    "mcp>=1.0,<2.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+browsers = [
+    "playwright>=1.40",
+]
+
+[project.scripts]
+pyrecrawl = "pyrecrawl.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/SanggonBoy/PyreCrawl"
+Repository = "https://github.com/SanggonBoy/PyreCrawl"
+Documentation = "https://github.com/SanggonBoy/PyreCrawl#readme"
+Issues = "https://github.com/SanggonBoy/PyreCrawl/issues"
+Changelog = "https://github.com/SanggonBoy/PyreCrawl/releases"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pyrecrawl"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
