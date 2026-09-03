@@ -1,26 +1,26 @@
-# 🔥 PyreCrawl — Self-Hosted Firecrawl Alternative as an MCP Server
+# 🔥 PyreCrawl — Web Browsing Superpowers for Your AI Agent
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MCP](https://img.shields.io/badge/MCP-1.0-blue.svg)](https://modelcontextprotocol.io/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![PyPI](https://img.shields.io/pypi/v/pyrecrawl.svg)](https://pypi.org/project/pyrecrawl/)
 
-A **self-hosted Firecrawl alternative** combining two best-in-class open-source scrapers
-behind a single Model Context Protocol (MCP) server:
+**One command gives any AI agent the whole web.** Scrape, extract, crawl, map, and search —
+self-hosted, no API keys, no rate limits, no subscription.
 
-- **[Scrapling](https://github.com/D4Vinci/Scrapling)** — fast HTTP (curl_cffi) + stealth browser with **Cloudflare Turnstile bypass**, adaptive element tracking, and XHR capture
-- **[Crawl4AI](https://github.com/unclecode/crawl4ai)** — LLM-first crawler: BM25 fit-markdown, citations, structured extraction, deep crawl (BFS/DFS/BestFirst)
+PyreCrawl speaks **MCP** (Model Context Protocol), the standard tool interface for Claude,
+Cursor, VS Code, Codex, OpenCode, Hermes, and any MCP-compatible agent.
 
-A **smart auto-fallback ladder** tries the cheapest engine that succeeds:
+A **smart auto-fallback ladder** always picks the cheapest method that succeeds:
 
 ```
-fast HTTP (Scrapling)
+fast HTTP
     │  (403/503/Cloudflare challenge or empty body)
     ▼
-stealth browser (Scrapling StealthyFetcher + CF solver)
-    │  (still blocked or page needs full JS rendering)
+stealth browser (real Chromium + Cloudflare solver)
+    │  (still blocked, or the page needs full JS rendering)
     ▼
-full LLM processing (Crawl4AI AsyncWebCrawler + BM25)
+deep processing (LLM-ready markdown, citations, structured extraction)
 ```
 
 ## ⚡ Tools exposed
@@ -34,7 +34,7 @@ full LLM processing (Crawl4AI AsyncWebCrawler + BM25)
 | `search(query, limit=10)` | Web search via DuckDuckGo HTML (no API key) |
 | `health()` | Versions + import sanity check |
 
-`prefer` options: `"auto"` (default ladder) · `"fast"` (HTTP only) · `"stealth"` (CF bypass) · `"llm"` (full Crawl4AI).
+`prefer` options: `"auto"` (default ladder) · `"fast"` (HTTP only) · `"stealth"` (CF bypass) · `"llm"` (deep processing).
 
 ---
 
@@ -59,7 +59,7 @@ pip install pyrecrawl
 pyrecrawl setup
 ```
 
-This installs Playwright Chromium + Scrapling engines (~2 min, one-time).
+This installs Chromium + stealth browser engines (~2 min, one-time).
 
 ### 3. Register with your AI agent
 
@@ -200,19 +200,21 @@ mcp_servers:
 
 ---
 
-## 🧠 Why two engines?
+## 🧠 How the ladder chooses
 
-| Concern | Scrapling | Crawl4AI |
-|---|---|---|
-| Static HTML page | ✅ curl_cffi, ~200ms | ✅ browser overhead, ~3s |
-| Cloudflare-protected | ✅ Turnstile solver | ⚠️ requires stealth setup |
-| JS-heavy SPA | ✅ Chromium real browser | ✅ same |
-| LLM-ready markdown | ⚠️ basic | ✅ BM25 + citations + fit |
-| Structured extraction (CSS schema) | ❌ | ✅ JsonCss strategy |
-| Deep crawl (BFS/DFS/BestFirst) | ✅ Spider + AutoThrottle | ✅ BFS/DFS/BestFirst + adaptive |
-| Adaptive element tracking | ✅ parser relocates moved elements | ❌ |
+PyreCrawl runs each request through three tiers, stopping at the first one that returns
+a complete, LLM-ready result:
 
-**PyreCrawl = Scrapling for fetch & bypass + Crawl4AI for processing & extraction.**
+| Concern | Fast tier | Stealth tier | Deep tier |
+|---|---|---|---|
+| Static HTML page | ✅ ~200ms | — | — |
+| Cloudflare-protected | ❌ | ✅ Turnstile solver | — |
+| JS-heavy SPA | ❌ | ✅ real Chromium | — |
+| LLM-ready markdown + citations | — | — | ✅ BM25, fit-markdown |
+| Structured extraction (CSS schema) | — | — | ✅ |
+| Deep crawl (BFS/DFS/BestFirst) | — | — | ✅ adaptive |
+
+The agent never has to pick. `prefer="auto"` does it every call.
 
 ---
 
@@ -222,7 +224,7 @@ mcp_servers:
 |---|---|---|
 | Cost | Free 1k/mo, then $16–333/mo | **Free, self-hosted** |
 | Local LLM support | ❌ | ✅ Ollama / any LLM |
-| Cloudflare bypass | ✅ (Fire-Engine, paid) | ✅ (free, Scrapling) |
+| Cloudflare bypass | ✅ (Fire-Engine, paid) | ✅ (free, built-in) |
 | Markdown + BM25 | ✅ | ✅ |
 | Self-host | ❌ | ✅ |
 | Hosted search API | ✅ /search | ⚠️ DuckDuckGo HTML (no key) |
@@ -278,3 +280,8 @@ uv tool uninstall pyrecrawl
 ## 🛡️ License
 
 MIT — see [LICENSE](LICENSE).
+
+## 🙏 Credits
+
+Built on the shoulders of [Scrapling](https://github.com/D4Vinci/Scrapling) and
+[Crawl4AI](https://github.com/unclecode/crawl4ai) — both MIT, both excellent.
