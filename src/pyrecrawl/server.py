@@ -32,7 +32,6 @@ from .engines import (
     CACHE,
     crawl_site,
     extract_structured,
-    extract_llm,
     map_urls,
     process_llm,
     scrape_fast,
@@ -294,42 +293,6 @@ def build_server() -> FastMCP:
         except Exception as e:  # noqa: BLE001
             log.exception("batch_scrape failed")
             return {"error": str(e), "urls": urls}
-
-    @mcp.tool(name="extract_llm")
-    def extract_llm_tool(
-        url: str,
-        instruction: str,
-        schema: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Extract structured data from a page with NATURAL LANGUAGE instructions.
-
-        No CSS selectors needed — describe what you want in plain English.
-        Renders the page (llm tier) then asks an LLM to fill the output.
-
-        Args:
-            url: Target URL (http/https/file/raw:).
-            instruction: what to extract, in plain English.
-                Example: "Extract every product with name, price, and rating."
-            schema: optional JSON schema (dict) constraining the output.
-                When set, the LLM is forced to return matching JSON.
-
-        LLM config comes from env: PYRECRAWL_LLM_PROVIDER (default
-        "openai/gpt-4o-mini", or "ollama/llama3.1" for local),
-        PYRECRAWL_LLM_API_TOKEN (or OPENAI_API_KEY), OPENAI_BASE_URL or
-        OLLAMA_BASE_URL (default http://localhost:11434/v1).
-        """
-        try:
-            r = extract_llm(url, instruction, schema)
-            return {
-                "url": r.url,
-                "instruction": instruction,
-                "data": r.data,
-                "method": r.method,
-                "elapsed_ms": r.elapsed_ms,
-            }
-        except Exception as e:  # noqa: BLE001
-            log.exception("extract_llm failed")
-            return {"error": str(e), "url": url, "instruction": instruction}
 
     @mcp.tool(name="cache")
     def cache_tool(action: str = "stats") -> dict[str, Any]:
