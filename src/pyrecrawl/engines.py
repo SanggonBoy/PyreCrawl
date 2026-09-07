@@ -9,6 +9,7 @@ The ladder tries each strategy in order until one succeeds:
 from __future__ import annotations
 
 import asyncio
+import difflib
 import hashlib
 import json
 import os
@@ -16,6 +17,7 @@ import re
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from pathlib import Path
 from threading import Lock
 from typing import Any, Iterable
 
@@ -950,3 +952,230 @@ def _html_to_markdown(html: str) -> str:
     text = _TAG_RE.sub(' ', html)
     text = text.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
     return _WS_RE.sub(' ', text).strip()
+
+
+# ---------------------------------------------------------------------------
+# deep_research — search → scrape → evidence pack (NO LLM synthesis)
+# ---------------------------------------------------------------------------
+
+def deep_research(
+    query: str,
+    *,
+    limit: int = 5,
+    scrape_top: int = 3,
+    prefer: str = "auto",
+    max_concurrency: int = 4,
+) -> dict[str, Any]:
+    """Run a web search and pull the top sources as evidence.
+
+    PyreCrawl stays out of the synthesis step — the calling agent does
+    the reading. We return:
+      * ranked search hits (title/snippet/url), and
+      * markdown + title for the top `scrape_top` sources, with
+        stable ``[n]`` citation numbers and the mapping in ``citations``.
+
+    Args:
+        query: search string.
+        limit: how many search results to fetch (DDG free tier works fine
+            for 5–10).
+        scrape_top: how many of those to actually fetch content from
+            (bigger = more context but slower).
+        prefer: ladder preference, same as ``scrape``.
+        max_concurrency: parallel workers for the per-URL scrape.
+
+    Returns:
+        dict with ``query``, ``hits`` (list), ``evidence`` (list of
+        {n, url, title, markdown, status}), ``citations`` (list of
+        {n, url, title}), and ``elapsed_ms``.
+    """
+    t0 = time.perf_counter()
+    hits = search_web(query, limit=limit, prefer=prefer) or []
+    top_urls: list[str] = []
+    seen: set[str] = set()
+    for h in hits:
+        u = h.get("url", "")
+        if u and u not in seen:
+            seen.add(u)
+            top_urls.append(u)
+        if len(top_urls) >= scrape_top:
+            break
+
+    evidence: list[dict[str, Any]] = []
+    if top_urls:
+        batched = batch_scrape(
+            top_urls, prefer=prefer,
+            max_concurrency=max_concurrency, use_cache=True,
+        )
+        for i, r in enumerate(batched.get("results", []), start=1):
+            evidence.append({
+                "n": i,
+                "url": r.get("url") or r.get("final_url"),
+                "title": r.get("title"),
+                "status": r.get("status"),
+                "markdown": r.get("markdown", ""),
+                "method": r.get("method"),
+                "elapsed_ms": r.get("elapsed_ms"),
+                "error": r.get("error"),
+            })
+
+    citations = [
+        {"n": e["n"], "url": e["url"], "title": e["title"]}
+        for e in evidence if e.get("error") is None
+    ]
+    return {
+        "query": query,
+        "hits": hits,
+        "evidence": evidence,
+        "citations": citations,
+        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+    }
+
+
+# ponytail: deep_research could fold in the LLM (summarizer) layer next to
+# the search hits, but that adds a non-optional second LLM call and breaks
+# the "no API keys" promise. Agent-side synthesis is the right ceiling —
+# upgrade path: add optional llm_synthesis=True for hosts that opt in.
+
+
+# ---------------------------------------------------------------------------
+# monitor — change detection with persisted snapshots
+# ---------------------------------------------------------------------------
+
+def _monitor_root() -> Path:
+    raw = os.environ.get("PYRECRAWL_MONITOR_DIR", "").strip()
+    if raw:
+        root = Path(raw)
+    else:
+        root = Path.home() / ".pyrecrawl" / "monitors"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _monitor_path(url: str) -> Path:
+    safe = re.sub(r"[^a-zA-Z0-9._-]", "_", url)[:200] or "url"
+    return _monitor_root() / f"{safe}.json"
+
+
+def _content_hash(text: str) -> str:
+    return hashlib.sha256((text or "").encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _markdown_or_text(result: dict[str, Any]) -> str:
+    return result.get("markdown") or result.get("text") or ""
+
+
+def monitor(
+    url: str,
+    *,
+    action: str = "check",
+    prefer: str = "auto",
+    css_selector: str | None = None,
+) -> dict[str, Any]:
+    """Track a URL over time and report meaningful content changes.
+
+    Args:
+        url: target URL.
+        action:
+          * "check"   — fetch and compare with last snapshot. Returns
+            ``status`` of "new" | "unchanged" | "changed" | "error",
+            a unified diff (``diff``) when changed, and the new snapshot.
+          * "history" — return the list of stored snapshots for ``url``,
+            newest first.
+          * "forget"  — delete the stored snapshots for ``url``.
+        prefer: ladder preference, same as ``scrape``.
+        css_selector: optional CSS selector to scope the tracked content
+            (stripped from the HTML before hashing/diffing so banner
+            changes don't trigger false positives).
+
+    Returns a dict with ``url``, ``status``, and a ``snapshot`` /
+    ``diff`` / ``history`` payload depending on ``action``.
+    """
+    path = _monitor_path(url)
+    now = time.time()
+    iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+
+    if action == "forget":
+        if path.exists():
+            path.unlink()
+        return {"url": url, "status": "forgotten"}
+
+    if action == "history":
+        if not path.exists():
+            return {"url": url, "status": "no_history", "history": []}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return {"url": url, "status": "corrupt", "history": []}
+        history = sorted(data.get("snapshots", []), key=lambda s: s["ts"], reverse=True)
+        return {"url": url, "status": "ok", "history": history}
+
+    # action == "check"
+    try:
+        r = scrape_smart(url, prefer=prefer)
+        text = r.markdown or ""
+        if css_selector:
+            try:
+                from scrapling.parser import Selector
+                node = Selector(r.html or "").css(css_selector)
+                text = "\n".join(n.get_all_text(strip=True) for n in node)
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception as e:  # noqa: BLE001
+        return {"url": url, "status": "error", "error": str(e)}
+
+    new_hash = _content_hash(text)
+    new_snap = {
+        "ts": now, "iso": iso, "hash": new_hash,
+        "title": r.title, "status": r.status, "method": r.method,
+        "text": text,
+    }
+
+    prev: dict[str, Any] | None = None
+    snapshots: list[dict[str, Any]] = []
+    if path.exists():
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            prev = doc.get("latest")
+            snapshots = list(doc.get("snapshots", []))
+        except Exception:  # noqa: BLE001
+            prev = None
+
+    if prev is None:
+        status = "new"
+        diff_text = ""
+    elif prev["hash"] == new_hash:
+        status = "unchanged"
+        diff_text = ""
+    else:
+        status = "changed"
+        diff_text = "\n".join(
+            difflib.unified_diff(
+                (prev.get("text") or "").splitlines(),
+                text.splitlines(),
+                fromfile=f"{url}@{prev['iso']}",
+                tofile=f"{url}@{iso}",
+                lineterm="",
+                n=2,
+            )
+        )
+
+    # cap history to 20 snapshots to keep files small
+    snapshots.append(new_snap)
+    snapshots = snapshots[-20:]
+    payload = {"url": url, "latest": new_snap, "snapshots": snapshots}
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    out: dict[str, Any] = {
+        "url": url, "status": status, "checked_at": iso,
+        "hash": new_hash, "title": r.title,
+    }
+    if diff_text:
+        # cap diff size to keep responses small
+        out["diff"] = diff_text[:20_000]
+        out["diff_truncated"] = len(diff_text) > 20_000
+    return out
+
+
+# ponytail: monitor doesn't honor ETag/Last-Modified yet — when ResponseCache
+# grows conditional GET support, the monitor should reuse it so unchanged
+# pages don't even get a fresh body. Add once cross-process cache ships.

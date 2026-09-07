@@ -33,12 +33,14 @@ from .engines import (
     crawl_site,
     extract_structured,
     map_urls,
+    monitor,
     process_llm,
     scrape_fast,
     scrape_smart,
     scrape_stealth,
     search_web,
     batch_scrape,
+    deep_research,
 )
 
 log = logging.getLogger("pyrecrawl")
@@ -293,6 +295,69 @@ def build_server() -> FastMCP:
         except Exception as e:  # noqa: BLE001
             log.exception("batch_scrape failed")
             return {"error": str(e), "urls": urls}
+
+    @mcp.tool(name="deep_research")
+    def deep_research_tool(
+        query: str,
+        limit: int = 5,
+        scrape_top: int = 3,
+        prefer: str = "auto",
+    ) -> dict[str, Any]:
+        """Search the web, then pull the top sources as EVIDENCE (no LLM synthesis).
+
+        Returns a ``citations`` list with stable [n] numbers and an
+        ``evidence`` list of per-source markdown — the agent does the
+        synthesis. Designed for research, RAG prep, and fact-checking.
+
+        Args:
+            query: search string.
+            limit: how many search results to fetch.
+            scrape_top: how many of those to actually fetch content from.
+            prefer: "auto" | "fast" | "stealth" | "llm".
+        """
+        try:
+            r = deep_research(
+                query, limit=limit, scrape_top=scrape_top, prefer=prefer,
+            )
+            # Trim each evidence markdown so a single 200KB page can't blow
+            # the response. Full text lives in the agent's tool cache.
+            for ev in r.get("evidence", []):
+                md = ev.get("markdown") or ""
+                if len(md) > MAX_MD_CHARS:
+                    ev["markdown"] = md[:MAX_MD_CHARS]
+                    ev["markdown_truncated"] = True
+                    ev["markdown_full_chars"] = len(md)
+            return r
+        except Exception as e:  # noqa: BLE001
+            log.exception("deep_research failed")
+            return {"error": str(e), "query": query}
+
+    @mcp.tool(name="monitor")
+    def monitor_tool(
+        url: str,
+        action: str = "check",
+        prefer: str = "auto",
+        css_selector: str | None = None,
+    ) -> dict[str, Any]:
+        """Track a URL over time and report meaningful content changes.
+
+        Args:
+            url: target URL.
+            action: "check" | "history" | "forget".
+            prefer: ladder preference, same as ``scrape``.
+            css_selector: scope the diff to one element (so banner /
+                nav changes don't trigger false positives).
+
+        Snapshots persist under ``PYRECRAWL_MONITOR_DIR`` (default
+        ``~/.pyrecrawl/monitors/``). ``check`` returns ``status`` of
+        ``new`` | ``unchanged`` | ``changed`` | ``error`` and a unified
+        diff when the page changed.
+        """
+        try:
+            return monitor(url, action=action, prefer=prefer, css_selector=css_selector)
+        except Exception as e:  # noqa: BLE001
+            log.exception("monitor failed")
+            return {"error": str(e), "url": url, "action": action}
 
     @mcp.tool(name="cache")
     def cache_tool(action: str = "stats") -> dict[str, Any]:
