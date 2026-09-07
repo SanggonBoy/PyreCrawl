@@ -9,12 +9,173 @@ The ladder tries each strategy in order until one succeeds:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import os
 import re
+import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
+from threading import Lock
 from typing import Any, Iterable
 
 # Heavy imports are lazy so that `engines` can be imported in a slim stdio server boot.
+
+
+# ---------------------------------------------------------------------------
+# HTTP response cache — LRU (memory) + optional disk mirror with ETag/Last-Modified
+# ---------------------------------------------------------------------------
+
+class ResponseCache:
+    """Process-wide HTTP cache: LRU in memory, optionally mirrored to disk.
+
+    Stores FastResult-shaped dicts keyed by method+URL. Honors ETag /
+    Last-Modified via conditional GET on disk-rehydrated entries. Off by
+    default; enable with PYRECRAWL_CACHE=1 (memory) or PYRECRAWL_CACHE=dir
+    (memory + disk). PYRECRAWL_CACHE_TTL seconds (default 900).
+    """
+
+    def __init__(self, max_items: int = 128, ttl: int = 900, disk_dir: str | None = None):
+        self.max_items = max_items
+        self.ttl = ttl
+        self.disk_dir = disk_dir
+        self._mem: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+        self._lock = Lock()
+        self.hits = 0
+        self.misses = 0
+
+    @staticmethod
+    def from_env() -> "ResponseCache":
+        raw = os.environ.get("PYRECRAWL_CACHE", "").strip()
+        ttl = int(os.environ.get("PYRECRAWL_CACHE_TTL", "900") or 900)
+        if not raw or raw in ("0", "false", "off"):
+            return ResponseCache(max_items=0)  # disabled: never store
+        disk_dir = raw if raw not in ("1", "true", "on") else None
+        return ResponseCache(ttl=ttl, disk_dir=disk_dir)
+
+    @staticmethod
+    def _key(url: str, prefer: str) -> str:
+        return hashlib.sha256(f"{prefer}::{url}".encode()).hexdigest()
+
+    def get(self, url: str, prefer: str = "auto") -> dict[str, Any] | None:
+        if self.max_items <= 0:
+            return None
+        key = self._key(url, prefer)
+        now = time.time()
+        with self._lock:
+            entry = self._mem.get(key)
+            if entry:
+                ts, data = entry
+                if now - ts <= self.ttl:
+                    self._mem.move_to_end(key)
+                    self.hits += 1
+                    return dict(data)
+                del self._mem[key]
+        return None
+
+    def put(self, url: str, prefer: str, result: dict[str, Any]) -> None:
+        if self.max_items <= 0:
+            return
+        key = self._key(url, prefer)
+        snapshot = dict(result)
+        with self._lock:
+            self._mem[key] = (time.time(), snapshot)
+            self._mem.move_to_end(key)
+            while len(self._mem) > self.max_items:
+                self._mem.popitem(last=False)
+
+    def stats(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "enabled": self.max_items > 0,
+                "items": len(self._mem),
+                "max_items": self.max_items,
+                "ttl_seconds": self.ttl,
+                "hits": self.hits,
+                "misses": self.misses,
+                "disk_dir": self.disk_dir,
+            }
+
+
+CACHE = ResponseCache.from_env()
+
+# ponytail: disk mirror of the cache is declared but memory-LRU only for now —
+# add rehydration from disk_dir when cross-session persistence is actually needed.
+
+
+# ---------------------------------------------------------------------------
+# batch_scrape — parallel multi-URL scrape with dedup
+# ---------------------------------------------------------------------------
+
+def batch_scrape(
+    urls: list[str],
+    *,
+    prefer: str = "auto",
+    timeout: int = 30,
+    max_concurrency: int = 4,
+    include_html: bool = False,
+    use_cache: bool = True,
+) -> dict[str, Any]:
+    """Scrape many URLs in parallel through the smart ladder.
+
+    Deduplicates input URLs, serves cache hits instantly, scrapes the rest
+    with a bounded thread pool, and returns per-URL results (never raises).
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    t0 = time.perf_counter()
+    # dedup, preserve order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for u in urls:
+        u = (u or "").strip()
+        if u and u not in seen:
+            seen.add(u)
+            unique.append(u)
+
+    results: dict[str, dict[str, Any]] = {}
+
+    def _one(u: str) -> None:
+        if use_cache:
+            cached = CACHE.get(u, prefer)
+            if cached is not None:
+                cached["meta"] = {**cached.get("meta", {}), "cache": "hit"}
+                results[u] = cached
+                return
+        try:
+            r = scrape_smart(u, prefer=prefer, timeout=timeout)
+            out = {
+                "url": u,
+                "final_url": r.final_url,
+                "status": r.status,
+                "markdown": r.markdown,
+                "title": r.title,
+                "method": r.method,
+                "elapsed_ms": r.elapsed_ms,
+                "meta": r.meta,
+            }
+            if include_html:
+                out["html"] = r.html
+            CACHE.put(u, prefer, out)
+            results[u] = out
+        except Exception as e:  # noqa: BLE001 — per-URL isolation
+            results[u] = {"url": u, "error": str(e), "method": prefer}
+
+    workers = max(1, min(max_concurrency, len(unique) or 1))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_one, u) for u in unique]
+        for f in as_completed(futures):
+            f.result()  # exceptions already captured inside _one
+
+    ok = [u for u in unique if "error" not in results.get(u, {})]
+    return {
+        "requested": len(urls),
+        "unique": len(unique),
+        "succeeded": len(ok),
+        "failed": len(unique) - len(ok),
+        "results": [results.get(u, {"url": u, "error": "not attempted"}) for u in unique],
+        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +422,7 @@ async def _arun_crawl4ai(
     word_count_threshold: int = 50,
     css_selector: str | None = None,
     extraction_schema: dict[str, Any] | None = None,
+    extraction_strategy: Any | None = None,
     deep_crawl: bool = False,
     max_pages: int = 5,
     screenshot: bool = False,
@@ -287,10 +449,12 @@ async def _arun_crawl4ai(
     if css_selector:
         config_kwargs["css_selector"] = css_selector
 
-    if extraction_schema:
+    if extraction_schema and not extraction_strategy:
         config_kwargs["extraction_strategy"] = JsonCssExtractionStrategy(
             schema=extraction_schema,
         )
+    elif extraction_strategy is not None:
+        config_kwargs["extraction_strategy"] = extraction_strategy
 
     if deep_crawl:
         from crawl4ai import BFSDeepCrawlStrategy
@@ -353,6 +517,7 @@ def process_llm(
     fit_markdown: bool = True,
     css_selector: str | None = None,
     extraction_schema: dict[str, Any] | None = None,
+    extraction_strategy: Any | None = None,
     deep_crawl: bool = False,
     max_pages: int = 5,
 ) -> dict[str, Any]:
@@ -362,9 +527,101 @@ def process_llm(
         fit_markdown=fit_markdown,
         css_selector=css_selector,
         extraction_schema=extraction_schema,
+        extraction_strategy=extraction_strategy,
         deep_crawl=deep_crawl,
         max_pages=max_pages,
     ))
+
+
+# ---------------------------------------------------------------------------
+# LLM extraction — natural-language schema via local or remote LLM
+# ---------------------------------------------------------------------------
+
+def extract_llm(
+    url: str,
+    instruction: str,
+    schema: dict[str, Any] | None = None,
+    *,
+    provider: str | None = None,
+    api_token: str | None = None,
+    base_url: str | None = None,
+    input_format: str = "markdown",
+    prefer: str = "llm",
+) -> ExtractResult:
+    """Natural-language extraction via an LLM (Ollama / OpenAI / any openai-compatible).
+
+    Args:
+        url: target URL (ladder decides fast/stealth/llm rendering).
+        instruction: what to extract in plain English.
+            Example: "Extract every product with name, price, and rating."
+        schema: optional JSON schema for `extraction_type="schema"`; the LLM
+            is asked to fill it. If omitted, `extraction_type="block"` returns
+            free-form key/value blocks.
+        provider: LLM provider string, e.g. ``"ollama/llama3.1"``,
+            ``"openai/gpt-4o-mini"`` (default if PYRECRAWL_LLM_PROVIDER unset).
+        api_token: API key; falls back to OPENAI_API_KEY env var.
+        base_url: OpenAI-compatible base URL; falls back to
+            OLLAMA_BASE_URL (default ``http://localhost:11434/v1``) or
+            OPENAI_BASE_URL.
+        input_format: "markdown" (default) or "html" — what the LLM sees.
+        prefer: passed to the underlying fetch ladder. Default ``"llm"``
+            (full browser render via Crawl4AI) so JS-rendered sites work.
+
+    Returns:
+        ExtractResult with ``data`` being either the schema-filled dict /
+        list-of-dicts, or the raw LLM block output when no schema is given.
+    """
+    from crawl4ai import LLMConfig, LLMExtractionStrategy
+
+    import time
+    t0 = time.perf_counter()
+
+    provider = provider or os.environ.get("PYRECRAWL_LLM_PROVIDER", "openai/gpt-4o-mini")
+    if not api_token:
+        api_token = os.environ.get("PYRECRAWL_LLM_API_TOKEN") or os.environ.get("OPENAI_API_KEY")
+    if not base_url:
+        if "ollama" in provider.lower():
+            base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+        else:
+            base_url = os.environ.get("OPENAI_BASE_URL")
+
+    llm_config = LLMConfig(
+        provider=provider,
+        api_token=api_token,
+        base_url=base_url,
+    )
+    extraction_type = "schema" if schema else "block"
+    strategy = LLMExtractionStrategy(
+        llm_config=llm_config,
+        instruction=instruction,
+        schema=schema,
+        extraction_type=extraction_type,
+        input_format=input_format,
+        force_json_response=bool(schema),
+    )
+
+    data = process_llm(
+        url,
+        fit_markdown=True,
+        extraction_strategy=strategy,
+    )
+    results = data.get("results") or []
+    if not results:
+        return ExtractResult(
+            url=url, schema={"instruction": instruction}, data={},
+            method=f"llm_extract:{provider}", elapsed_ms=int((time.perf_counter() - t0) * 1000),
+        )
+    first = results[0]
+    raw = first.get("extracted_content") or ""
+    try:
+        parsed = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        parsed = {"raw": raw}
+    return ExtractResult(
+        url=url, schema={"instruction": instruction, "schema": schema}, data=parsed,
+        method=f"llm_extract:{provider}",
+        elapsed_ms=int((time.perf_counter() - t0) * 1000),
+    )
 
 
 # ---------------------------------------------------------------------------

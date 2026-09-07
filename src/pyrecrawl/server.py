@@ -29,14 +29,17 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from .engines import (
+    CACHE,
     crawl_site,
     extract_structured,
+    extract_llm,
     map_urls,
     process_llm,
     scrape_fast,
     scrape_smart,
     scrape_stealth,
     search_web,
+    batch_scrape,
 )
 
 log = logging.getLogger("pyrecrawl")
@@ -253,6 +256,103 @@ def build_server() -> FastMCP:
         except Exception as e:  # noqa: BLE001
             log.exception("search failed")
             return {"error": str(e), "query": query}
+
+    @mcp.tool(name="batch_scrape")
+    def batch_scrape_tool(
+        urls: list[str],
+        prefer: str = "auto",
+        timeout: int = 30,
+        max_concurrency: int = 4,
+        include_html: bool = False,
+    ) -> dict[str, Any]:
+        """Scrape MANY URLs in ONE call (parallel, deduped, cache-aware).
+
+        Args:
+            urls: Target URLs (deduped automatically; empties dropped).
+            prefer: "auto" | "fast" | "stealth" | "llm".
+            timeout: per-URL timeout in seconds.
+            max_concurrency: parallel workers (default 4).
+            include_html: include raw HTML per result (large; off by default).
+
+        Returns {requested, unique, succeeded, failed, results[]}.
+        Per-URL failures are isolated — other URLs still succeed.
+        """
+        from .engines import batch_scrape as _batch
+        try:
+            out = _batch(
+                urls, prefer=prefer, timeout=timeout,
+                max_concurrency=max_concurrency, include_html=include_html,
+            )
+            # Trim markdowns the same way single-page results are trimmed.
+            for r in out.get("results", []):
+                if isinstance(r.get("markdown"), str) and len(r["markdown"]) > MAX_MD_CHARS:
+                    md_len = len(r["markdown"])
+                    r["markdown"] = r["markdown"][:MAX_MD_CHARS]
+                    r["markdown_truncated"] = True
+                    r["markdown_full_chars"] = md_len
+            return out
+        except Exception as e:  # noqa: BLE001
+            log.exception("batch_scrape failed")
+            return {"error": str(e), "urls": urls}
+
+    @mcp.tool(name="extract_llm")
+    def extract_llm_tool(
+        url: str,
+        instruction: str,
+        schema: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Extract structured data from a page with NATURAL LANGUAGE instructions.
+
+        No CSS selectors needed — describe what you want in plain English.
+        Renders the page (llm tier) then asks an LLM to fill the output.
+
+        Args:
+            url: Target URL (http/https/file/raw:).
+            instruction: what to extract, in plain English.
+                Example: "Extract every product with name, price, and rating."
+            schema: optional JSON schema (dict) constraining the output.
+                When set, the LLM is forced to return matching JSON.
+
+        LLM config comes from env: PYRECRAWL_LLM_PROVIDER (default
+        "openai/gpt-4o-mini", or "ollama/llama3.1" for local),
+        PYRECRAWL_LLM_API_TOKEN (or OPENAI_API_KEY), OPENAI_BASE_URL or
+        OLLAMA_BASE_URL (default http://localhost:11434/v1).
+        """
+        try:
+            r = extract_llm(url, instruction, schema)
+            return {
+                "url": r.url,
+                "instruction": instruction,
+                "data": r.data,
+                "method": r.method,
+                "elapsed_ms": r.elapsed_ms,
+            }
+        except Exception as e:  # noqa: BLE001
+            log.exception("extract_llm failed")
+            return {"error": str(e), "url": url, "instruction": instruction}
+
+    @mcp.tool(name="cache")
+    def cache_tool(action: str = "stats") -> dict[str, Any]:
+        """Inspect the response cache: stats or clear.
+
+        Args:
+            action: "stats" | "clear" | "disable" | "enable".
+        """
+        try:
+            if action == "clear":
+                import time as _t
+                with CACHE._lock:
+                    CACHE._mem.clear()
+                return {"cleared": True, "stats": CACHE.stats()}
+            if action == "disable":
+                CACHE.max_items = 0
+                return {"enabled": False}
+            if action == "enable":
+                CACHE.max_items = 128
+                return {"enabled": True, "stats": CACHE.stats()}
+            return CACHE.stats()
+        except Exception as e:  # noqa: BLE001
+            return {"error": str(e)}
 
     @mcp.tool()
     def health() -> dict[str, Any]:
