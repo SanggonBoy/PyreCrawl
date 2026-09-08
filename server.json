@@ -2,27 +2,22 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.SanggonBoy/PyreCrawl",
   "title": "PyreCrawl",
-  "description": "12 tools for AI agents: scrape, crawl, extract, map, search, batch, research, monitor, interact.",
-  "version": "0.7.0",
+  "description": "13 tools for AI agents: scrape, crawl, extract, map, search, papers, batch, research, monitor.",
+  "version": "0.7.1",
   "repository": {
     "url": "https://github.com/SanggonBoy/PyreCrawl",
     "source": "github"
   },
-  "websiteUrl": "https://github.com/SanggonBoy/PyreCrawl",
+  "websiteUrl": "https://pypi.org/project/pyrecrawl/",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "pyrecrawl",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "runtimeHint": "uvx",
-      "transport": {
-        "type": "stdio"
-      },
+      "transport": { "type": "stdio" },
       "packageArguments": [
-        {
-          "type": "positional",
-          "valueHint": "serve"
-        }
+        { "type": "positional", "valueHint": "serve" }
       ]
     }
   ]
