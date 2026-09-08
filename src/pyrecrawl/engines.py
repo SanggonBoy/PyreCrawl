@@ -241,16 +241,16 @@ class _SessionThread:
 
     @staticmethod
     def _do(page, ctx, act: str, cmd: dict[str, Any]) -> dict[str, Any]:
-        if act == "goto":
-            resp = page.goto(cmd["url"], timeout=cmd.get("timeout_ms", 30000),
-                             wait_until=cmd.get("wait_until", "domcontentloaded"))
-            return {"url": page.url, "title": page.title(),
-                    "status": resp.status if resp else None}
+        if act == "open" or act == "goto":
+            resp = page.goto(cmd["url"], wait_until="domcontentloaded", timeout=cmd.get("timeout_ms", 15000))
+            page.wait_for_load_state("networkidle", timeout=10000)
+            return {"url": page.url, "title": page.title(), "status": resp.status if resp else 0}
         if act == "click":
             page.click(cmd["selector"], timeout=cmd.get("timeout_ms", 10000))
+            page.wait_for_load_state("networkidle", timeout=8000)
             return {"url": page.url, "clicked": cmd["selector"]}
         if act == "fill":
-            page.fill(cmd["selector"], cmd.get("text", ""), timeout=cmd.get("timeout_ms", 10000))
+            page.fill(cmd["selector"], cmd.get("value", cmd.get("text", "")), timeout=cmd.get("timeout_ms", 10000))
             return {"url": page.url, "filled": cmd["selector"]}
         if act == "type":
             page.press(cmd.get("selector") or "body", cmd["key"], timeout=cmd.get("timeout_ms", 10000))
@@ -261,14 +261,14 @@ class _SessionThread:
                 json.dumps(value)  # must be JSON-serializable back to the MCP client
             except (TypeError, ValueError):
                 value = str(value)
-            return {"url": page.url, "value": value}
+            return {"url": page.url, "result": value}
         if act == "wait":
             sel = cmd.get("selector")
             if sel:
                 page.wait_for_selector(sel, timeout=cmd.get("timeout_ms", 15000))
-            else:
-                page.wait_for_timeout(cmd.get("timeout_ms", 2000))
-            return {"url": page.url, "waited": sel}
+                return {"url": page.url, "waited_for": sel}
+            page.wait_for_timeout(cmd.get("timeout_ms", 5000))
+            return {"url": page.url, "waited_ms": cmd.get("timeout_ms", 5000)}
         if act == "content":
             html = page.content()
             body_text = page.evaluate("() => document.body ? document.body.innerText : ''")
@@ -276,11 +276,20 @@ class _SessionThread:
                     "text": body_text, "html_chars": len(html)}
         if act == "screenshot":
             import base64
-            shot = page.screenshot(full_page=cmd.get("full_page", False))
-            data = base64.b64encode(shot).decode("ascii")
-            return {"url": page.url, "png_base64": data, "bytes": len(shot)}
+            if not page.viewport_size:
+                page.set_viewport_size({"width": 1280, "height": 720})
+            last_err = None
+            for attempt in range(3):  # transient capture failures are common after idle
+                try:
+                    shot = page.screenshot(full_page=cmd.get("full_page", False))
+                    data = base64.b64encode(shot).decode("ascii")
+                    return {"url": page.url, "png_base64": data, "bytes": len(shot)}
+                except Exception as e:  # noqa: BLE001
+                    last_err = e
+                    page.wait_for_timeout(400)
+            raise last_err  # type: ignore[misc]
         if act == "cookies":
-            return {"url": page.url, "cookies": ctx.cookies()}
+            return {"cookies": ctx.cookies()}
         raise ValueError(f"unknown session action: {act}")
 
     def call(self, timeout: int = 125, **cmd) -> dict[str, Any]:
