@@ -33,6 +33,7 @@ deep processing (LLM-ready markdown, citations, structured extraction)
 | `crawl(root, max_pages=5, prefer="auto", include_paths=None, exclude_paths=None, max_depth=0)` | Multi-page crawl with path filters + true BFS depth |
 | `document(url)` | PDF/DOCX/PPTX → markdown (no browser, optional `[docs]` extras) |
 | `search(query, limit=10)` | Web search via DuckDuckGo HTML (no API key) |
+| `search_papers(query, limit=8, source="arxiv", category=None)` | Academic search via arXiv + Crossref (no API key) — feed `pdf_url` into `document` |
 | `batch_scrape(urls[], ...)` | Many URLs in ONE call — parallel, deduped, cache-aware |
 | `deep_research(query, limit=5, scrape_top=3)` | Search → evidence pack with [n] citations (no LLM synthesis — your agent does that) |
 | `monitor(url, action, css_selector=None)` | Change detection with persisted snapshots + unified diff |
@@ -268,7 +269,8 @@ that JS writes after an XHR — it never appears in the serialized HTML. The
 | Cloudflare bypass | ✅ (Fire-Engine, paid) | ✅ (free, built-in) |
 | Markdown + BM25 | ✅ | ✅ |
 | Self-host | ❌ | ✅ |
-| Hosted search API | ✅ /search | ⚠️ DuckDuckGo HTML (no key) |
+| Academic paper search | ❌ | ✅ arXiv + Crossref (`search_papers`) |
+| Hosted search API | ✅ /search | ⚠️ DuckDuckGo HTML + arXiv/Crossref (no key) |
 
 ---
 
@@ -298,8 +300,8 @@ python scripts/probe_stdio.py # stdio JSON-RPC probe
 Maintainers only:
 
 ```bash
-git tag v0.2.1
-git push origin v0.2.1
+git tag v0.8.0
+git push origin v0.8.0
 ```
 
 GitHub Actions builds + uploads to PyPI via [trusted publishing](https://docs.pypi.org/trusted-publishers/).
