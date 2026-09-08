@@ -30,6 +30,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .engines import (
     CACHE,
+    SESSIONS,
     crawl_site,
     extract_structured,
     map_urls,
@@ -41,6 +42,7 @@ from .engines import (
     search_web,
     batch_scrape,
     deep_research,
+    session_action,
 )
 
 log = logging.getLogger("pyrecrawl")
@@ -393,6 +395,141 @@ def build_server() -> FastMCP:
             except Exception as e:  # noqa: BLE001
                 info[f"{pkg}_error"] = str(e)
         return info
+
+    # -----------------------------------------------------------------------
+    # interact — persistent browser session for login walls / multi-step flows
+    # -----------------------------------------------------------------------
+
+    @mcp.tool(name="session")
+    def session_tool(
+        session: str = "default",
+        action: str = "open",
+        url: str | None = None,
+        selector: str | None = None,
+        text: str | None = None,
+        key: str | None = None,
+        js: str | None = None,
+        timeout_ms: int = 30000,
+        full_page: bool = False,
+        headless: bool = True,
+    ) -> dict[str, Any]:
+        """Drive a persistent browser session — cookies & JS state kept across calls.
+
+        Use for login walls and multi-step flows the ladder can't handle
+        (one-shot scrape has no session memory; here each action runs
+        against the same live page).
+
+        Args:
+            session: named session; reuse the same name to keep state.
+            action:
+              "open" (url)        — navigate, returns url/title/status
+              "click" (selector)  — click an element
+              "fill" (selector, text) — type into an input
+              "type" (key)        — press a key, e.g. "Enter"
+              "eval" (js)         — run a JS expression, returns value
+              "wait" (selector?)  — wait for selector or sleep timeout_ms
+              "content"           — url/title/visible text of current page
+              "screenshot" (full_page?) — returns png_base64
+              "cookies"           — list session cookies
+              "close"             — destroy the session
+              "list"              — show live sessions
+        Returns {session, action, ...result, elapsed_ms}; errors as {error}.
+        """
+        try:
+            return session_action(
+                session, action, url=url, selector=selector, text=text,
+                key=key, js=js, timeout_ms=timeout_ms, full_page=full_page,
+                headless=headless,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.exception("session action failed")
+            return {"error": str(e), "session": session, "action": action}
+
+    # -----------------------------------------------------------------------
+    # MCP Resources — cheap read-only state, no tool round-trip needed
+    # -----------------------------------------------------------------------
+
+    @mcp.resource("pyrecrawl://cache/stats")
+    def resource_cache_stats() -> str:
+        """Response cache state: enabled, items, hits/misses, TTL."""
+        return json.dumps(CACHE.stats(), indent=2)
+
+    @mcp.resource("pyrecrawl://sessions")
+    def resource_sessions() -> str:
+        """Live browser sessions with idle time."""
+        return json.dumps({"sessions": SESSIONS.list_sessions()}, indent=2)
+
+    @mcp.resource("pyrecrawl://monitors")
+    def resource_monitors() -> str:
+        """Monitored URLs and their last check (new/unchanged/changed state)."""
+        from .engines import _monitor_root
+        out: list[dict[str, Any]] = []
+        root = _monitor_root()
+        if root.exists():
+            for f in sorted(root.glob("*.json"))[:50]:
+                try:
+                    doc = json.loads(f.read_text(encoding="utf-8"))
+                    latest = doc.get("latest") or {}
+                    out.append({
+                        "url": doc.get("url"),
+                        "last_checked": latest.get("iso"),
+                        "status_code": latest.get("status"),
+                        "title": latest.get("title"),
+                        "snapshots": len(doc.get("snapshots", [])),
+                    })
+                except Exception:  # noqa: BLE001
+                    out.append({"file": f.name, "error": "unreadable"})
+        return json.dumps({"monitors": out}, indent=2)
+
+    # -----------------------------------------------------------------------
+    # MCP Prompts — reusable playbooks the agent can pull instead of guessing
+    # -----------------------------------------------------------------------
+
+    @mcp.prompt()
+    def research(topic: str, depth: str = "standard") -> str:
+        """Playbook: evidence-first research of a topic using PyreCrawl."""
+        return (
+            f"Research the topic: {topic!r} using PyreCrawl tools. "
+            "Rules: cite every claim with the [n] numbers from the evidence pack; "
+            "if evidence conflicts, say so; if a claim is unsupported, mark it "
+            "'needs source'. "
+            + (
+                "Go deeper: run deep_research, then map_site + crawl the best "
+                "domain for full coverage, and extract structured data where a "
+                "schema fits."
+                if depth == "deep" else
+                "Standard pass: deep_research(query, limit=5, scrape_top=3), "
+                "then answer from the evidence."
+            )
+        )
+
+    @mcp.prompt()
+    def rag_ingest(site: str, max_pages: str = "10") -> str:
+        """Playbook: turn a site into clean markdown for a RAG index."""
+        return (
+            f"Prepare {site!r} for RAG ingestion with PyreCrawl: "
+            f"1) map_site(root='{site}') to enumerate internal URLs (limit {max_pages} "
+            "per batch); 2) filter to the paths that matter via include_pattern "
+            "(docs/blog only, drop /tag/ /page/ junk); 3) batch_scrape the kept "
+            "URLs (prefer='auto', max_concurrency=4); 4) for each result, if "
+            "markdown_truncated, re-scrape that URL with the llm tier "
+            "(prefer='llm') to get fit-markdown; 5) emit one JSONL line per page "
+            "with {{url, title, markdown, fetched_at}}."
+        )
+
+    @mcp.prompt()
+    def watch_page(url: str, goal: str = "material changes only") -> str:
+        """Playbook: set up change watching on a page with a sensible baseline."""
+        return (
+            f"Set up monitoring for {url!r} (goal: {goal}). Steps: "
+            f"1) monitor(url='{url}', action='check') twice — the first call "
+            "baseline-checks and the second proves the hash path is quiet; "
+            "2) if the page is mostly chrome (nav/footer/cookie banner), pick a "
+            "css_selector that scopes to the content element and re-check; "
+            "3) report status new/unchanged; on 'changed' summarize the unified "
+            "diff and flag whether it matches the goal; 4) recommend a cadence "
+            "(e.g. cron 15m) and store the cadence note with the selector used."
+        )
 
     return mcp
 

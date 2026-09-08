@@ -32,7 +32,25 @@ deep processing (LLM-ready markdown, citations, structured extraction)
 | `map_site(root, include_pattern=None, limit=200)` | Enumerate all internal URLs |
 | `crawl(root, max_pages=5, prefer="auto")` | Multi-page crawl with auto-fallback per page |
 | `search(query, limit=10)` | Web search via DuckDuckGo HTML (no API key) |
+| `batch_scrape(urls[], ...)` | Many URLs in ONE call — parallel, deduped, cache-aware |
+| `deep_research(query, limit=5, scrape_top=3)` | Search → evidence pack with [n] citations (no LLM synthesis — your agent does that) |
+| `monitor(url, action, css_selector=None)` | Change detection with persisted snapshots + unified diff |
+| `session(session, action, ...)` | Persistent browser session (cookies kept) — login walls, multi-step flows, screenshots |
+| `cache(action)` | Inspect/clear/enable/disable the HTTP response cache |
 | `health()` | Versions + import sanity check |
+
+**MCP Resources** (read-only state without a tool call):
+`pyrecrawl://cache/stats` · `pyrecrawl://sessions` · `pyrecrawl://monitors`
+
+**MCP Prompts** (ready-made playbooks): `research(topic)` · `rag_ingest(site)` · `watch_page(url)`
+
+### Env flags
+
+| Variable | Default | Effect |
+|---|---|---|
+| `PYRECRAWL_CACHE` | off | `1` = in-memory LRU (128 pages), or a directory path (reserved for disk mode) |
+| `PYRECRAWL_CACHE_TTL` | `900` | Cache entry lifetime in seconds |
+| `PYRECRAWL_MONITOR_DIR` | `~/.pyrecrawl/monitors` | Where monitor snapshots persist |
 
 `prefer` options: `"auto"` (default ladder) · `"fast"` (HTTP only) · `"stealth"` (CF bypass) · `"llm"` (deep processing).
 

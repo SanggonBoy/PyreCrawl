@@ -13,12 +13,13 @@ import difflib
 import hashlib
 import json
 import os
+import queue
 import re
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from typing import Any, Iterable
 
 # Heavy imports are lazy so that `engines` can be imported in a slim stdio server boot.
@@ -178,6 +179,258 @@ def batch_scrape(
         "results": [results.get(u, {"url": u, "error": "not attempted"}) for u in unique],
         "elapsed_ms": int((time.perf_counter() - t0) * 1000),
     }
+
+
+# ---------------------------------------------------------------------------
+# interact — persistent browser sessions (cookies across calls)
+# ---------------------------------------------------------------------------
+
+class _SessionThread:
+    """One Playwright browser + page living on its own dedicated thread.
+
+    Playwright's sync API is thread-bound (it owns an event loop per
+    thread), so a session must be driven by message-passing: each call
+    posts a command dict and waits on the result queue.
+    """
+
+    def __init__(self, name: str, headless: bool = True):
+        self.name = name
+        self.headless = headless
+        self._boot_q: queue.Queue = queue.Queue()  # boot handshake only
+        self._cmd_q: queue.Queue = queue.Queue()   # commands (worker consumes)
+        self._res_q: queue.Queue = queue.Queue()   # results (caller consumes)
+        self._thread = Thread(target=self._run, name=f"pyrecrawl-session-{name}", daemon=True)
+        self._thread.start()
+        # raise the first-boot failure (browser missing etc.) here
+        err = self._boot_q.get(timeout=120)
+        if isinstance(err, Exception):
+            raise err
+
+    def _run(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as e:
+            self._boot_q.put(e)
+            return
+        try:
+            pw = sync_playwright().start()
+            browser = pw.chromium.launch(headless=self.headless)
+            ctx = browser.new_context()
+            page = ctx.new_page()
+        except Exception as e:  # noqa: BLE001 — browser/chromium missing at boot
+            self._boot_q.put(e)
+            return
+        self._boot_q.put("ready")
+        while True:
+            cmd = self._cmd_q.get()
+            if cmd is None:  # close signal
+                try:
+                    ctx.close()
+                    browser.close()
+                    pw.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._res_q.put({"closed": True})
+                return
+            act = cmd.get("action")
+            try:
+                result = self._do(page, ctx, act, cmd)
+                self._res_q.put({"ok": result})
+            except Exception as e:  # noqa: BLE001
+                self._res_q.put({"error": str(e)})
+
+    @staticmethod
+    def _do(page, ctx, act: str, cmd: dict[str, Any]) -> dict[str, Any]:
+        if act == "goto":
+            resp = page.goto(cmd["url"], timeout=cmd.get("timeout_ms", 30000),
+                             wait_until=cmd.get("wait_until", "domcontentloaded"))
+            return {"url": page.url, "title": page.title(),
+                    "status": resp.status if resp else None}
+        if act == "click":
+            page.click(cmd["selector"], timeout=cmd.get("timeout_ms", 10000))
+            return {"url": page.url, "clicked": cmd["selector"]}
+        if act == "fill":
+            page.fill(cmd["selector"], cmd.get("text", ""), timeout=cmd.get("timeout_ms", 10000))
+            return {"url": page.url, "filled": cmd["selector"]}
+        if act == "type":
+            page.press(cmd.get("selector") or "body", cmd["key"], timeout=cmd.get("timeout_ms", 10000))
+            return {"url": page.url, "key": cmd["key"]}
+        if act == "eval":
+            value = page.evaluate(f"() => ({cmd['js']})")
+            try:
+                json.dumps(value)  # must be JSON-serializable back to the MCP client
+            except (TypeError, ValueError):
+                value = str(value)
+            return {"url": page.url, "value": value}
+        if act == "wait":
+            sel = cmd.get("selector")
+            if sel:
+                page.wait_for_selector(sel, timeout=cmd.get("timeout_ms", 15000))
+            else:
+                page.wait_for_timeout(cmd.get("timeout_ms", 2000))
+            return {"url": page.url, "waited": sel}
+        if act == "content":
+            html = page.content()
+            body_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+            return {"url": page.url, "title": page.title(),
+                    "text": body_text, "html_chars": len(html)}
+        if act == "screenshot":
+            import base64
+            shot = page.screenshot(full_page=cmd.get("full_page", False))
+            data = base64.b64encode(shot).decode("ascii")
+            return {"url": page.url, "png_base64": data, "bytes": len(shot)}
+        if act == "cookies":
+            return {"url": page.url, "cookies": ctx.cookies()}
+        raise ValueError(f"unknown session action: {act}")
+
+    def call(self, timeout: int = 125, **cmd) -> dict[str, Any]:
+        self._cmd_q.put(cmd)
+        out = self._res_q.get(timeout=timeout)
+        if isinstance(out, dict) and "ok" in out:
+            return out["ok"]
+        if isinstance(out, dict) and "error" in out:
+            raise RuntimeError(out["error"])
+        raise RuntimeError(f"session {self.name!r} closed unexpectedly")
+
+    def close(self):
+        self._cmd_q.put(None)
+        self._res_q.get(timeout=60)
+
+
+class SessionManager:
+    """Registry of named persistent browser sessions.
+
+    One MCP `session` tool call = one action against a named session.
+    Sessions survive across tool calls in the same server process, so
+    login flows (fill user/pass → click login → navigate) keep cookies.
+    """
+
+    def __init__(self, ttl_seconds: int = 1800):
+        self.ttl = ttl_seconds
+        self._sessions: dict[str, _SessionThread] = {}
+        self._touched: dict[str, float] = {}
+        self._lock = Lock()
+
+    def _gc(self):
+        now = time.time()
+        for name, ts in list(self._touched.items()):
+            if now - ts > self.ttl:
+                try:
+                    self._sessions[name].close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._sessions.pop(name, None)
+                self._touched.pop(name, None)
+
+    def get_or_open(self, name: str, headless: bool = True) -> _SessionThread:
+        with self._lock:
+            self._gc()
+            s = self._sessions.get(name)
+            if s is None or not s._thread.is_alive():
+                if s is not None:
+                    self._sessions.pop(name, None)
+                s = _SessionThread(name, headless=headless)
+                self._sessions[name] = s
+            self._touched[name] = time.time()
+            return s
+
+    def close_session(self, name: str) -> bool:
+        with self._lock:
+            s = self._sessions.pop(name, None)
+            self._touched.pop(name, None)
+        if s is None:
+            return False
+        try:
+            s.close()
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        with self._lock:
+            self._gc()
+            now = time.time()
+            return [
+                {"name": n, "alive": s._thread.is_alive(),
+                 "idle_seconds": int(now - self._touched.get(n, now))}
+                for n, s in self._sessions.items()
+            ]
+
+
+SESSIONS = SessionManager()
+
+
+def session_action(
+    session: str,
+    action: str,
+    *,
+    url: str | None = None,
+    selector: str | None = None,
+    text: str | None = None,
+    key: str | None = None,
+    js: str | None = None,
+    timeout_ms: int = 30000,
+    full_page: bool = False,
+    headless: bool = True,
+) -> dict[str, Any]:
+    """Drive a named persistent browser session (cookies kept across calls).
+
+    Args:
+        session: session name (created on first use).
+        action: one of:
+            "open"       — (re)open URL in the session, return url/title/status.
+            "click"      — click `selector`.
+            "fill"       — fill `selector` with `text`.
+            "type"       — press `key` (e.g. "Enter") into `selector` (default body).
+            "eval"       — run JS expression `js`, return the value.
+            "wait"       — wait for `selector` (or sleep `timeout_ms`).
+            "content"    — return url/title/visible text of the current page.
+            "screenshot" — return PNG bytes (base64, ``full_page`` optional).
+            "cookies"    — return the session's cookies.
+            "close"      — destroy the session.
+        url/selector/text/key/js/timeout_ms/full_page/headless: per-action args.
+    """
+    t0 = time.perf_counter()
+    if action == "close":
+        ok = SESSIONS.close_session(session)
+        return {"session": session, "action": action, "closed": ok,
+                "elapsed_ms": int((time.perf_counter() - t0) * 1000)}
+    if action == "list":
+        return {"sessions": SESSIONS.list_sessions(),
+                "elapsed_ms": int((time.perf_counter() - t0) * 1000)}
+    thread = SESSIONS.get_or_open(session, headless=headless)
+    cmd: dict[str, Any] = {"action": "goto" if action == "open" else action}
+    if action == "open":
+        cmd["url"] = url
+        cmd["timeout_ms"] = timeout_ms
+    elif action == "click":
+        cmd["selector"] = selector
+        cmd["timeout_ms"] = min(timeout_ms, 15000)
+    elif action == "fill":
+        cmd["selector"] = selector
+        cmd["text"] = text or ""
+        cmd["timeout_ms"] = min(timeout_ms, 15000)
+    elif action == "type":
+        cmd["selector"] = selector or "body"
+        cmd["key"] = key or "Enter"
+        cmd["timeout_ms"] = min(timeout_ms, 15000)
+    elif action == "eval":
+        cmd["js"] = js
+    elif action == "wait":
+        if selector:
+            cmd["selector"] = selector
+        cmd["timeout_ms"] = timeout_ms
+    elif action == "screenshot":
+        cmd["full_page"] = full_page
+    out = thread.call(timeout=timeout_ms // 1000 + 95, **cmd)
+    out.update({"session": session, "action": action,
+                "elapsed_ms": int((time.perf_counter() - t0) * 1000)})
+    return out
+
+
+# ponytail: no network request interception or download handling yet — add
+# `on_request` hooks when a login flow needs to capture tokens/redirects.
+# Upgrade path: expose page.on("request") capture buffer in _do().
 
 
 # ---------------------------------------------------------------------------
