@@ -54,6 +54,13 @@ if not log.handlers:
     h.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s"))
     log.addHandler(h)
 
+# --- Startup version check (non-blocking, best-effort) ---
+try:
+    from .updater import startup_log as _startup_version_check
+    _startup_version_check()
+except Exception:  # noqa: BLE001
+    pass  # never break the server over a version check
+
 
 SERVER_NAME = "pyrecrawl"
 INSTRUCTIONS = (
@@ -457,6 +464,12 @@ def build_server() -> FastMCP:
                 info[pkg] = _v(pkg)
             except Exception as e:  # noqa: BLE001
                 info[f"{pkg}_error"] = str(e)
+        # --- Version / update info (cached 24h, silent on failure) ---
+        try:
+            from .updater import get_latest_version
+            info["version"] = get_latest_version()
+        except Exception:  # noqa: BLE001
+            pass
         return info
 
     # -----------------------------------------------------------------------

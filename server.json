@@ -3,7 +3,7 @@
   "name": "io.github.SanggonBoy/PyreCrawl",
   "title": "PyreCrawl",
   "description": "13 tools for AI agents: scrape, crawl, extract, map, search, papers, batch, research, monitor.",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "repository": {
     "url": "https://github.com/SanggonBoy/PyreCrawl",
     "source": "github"
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "pyrecrawl",
-      "version": "0.7.2",
+      "version": "0.7.3",
       "runtimeHint": "uvx",
       "transport": { "type": "stdio" },
       "packageArguments": [

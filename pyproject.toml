@@ -1,6 +1,6 @@
 [project]
 name = "pyrecrawl"
-version = "0.7.2"
+version = "0.7.3"
 description = "Web browsing superpowers for AI agents: one MCP tool to scrape, extract, crawl, map, and search any site — self-hosted, no API keys, with a smart auto-fallback ladder."
 readme = "README.md"
 license = { text = "MIT" }

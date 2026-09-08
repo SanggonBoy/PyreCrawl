@@ -6,4 +6,4 @@ A self-hosted Firecrawl alternative with a smart auto-fallback ladder:
   3. LLM processing (Crawl4AI AsyncWebCrawler, BM25, deep crawl, structured extraction)
 """
 
-__version__ = "0.7.2"
+__version__ = "0.7.3"

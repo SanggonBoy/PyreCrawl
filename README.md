@@ -62,14 +62,42 @@ deep processing (LLM-ready markdown, citations, structured extraction)
 
 ### 1. Install
 
+#### [UV](https://docs.astral.sh/uv/) (recommended — one command, zero Python setup)
+
+UV is a fast Python package manager that handles Python itself —
+no need to install Python separately. Get it once:
+
 ```bash
-# Using uv (recommended — fast, isolated, no venv needed)
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+[Learn more about UV →](https://docs.astral.sh/uv/)
+
+Then run PyreCrawl directly — no venv, no `pip install`, no Python download:
+
+```bash
+uvx pyrecrawl@latest
+```
+
+#### Or via uv tool install (persistent, recommended for regular use)
+
+```bash
 uv tool install pyrecrawl
+```
 
-# Or pipx (alternative)
+#### Or via pipx (alternative)
+
+```bash
 pipx install pyrecrawl
+```
 
-# Or pip into a venv
+#### Or via pip into a venv
+
+```bash
 pip install pyrecrawl
 ```
 
@@ -305,6 +333,30 @@ git push origin v0.8.0
 ```
 
 GitHub Actions builds + uploads to PyPI via [trusted publishing](https://docs.pypi.org/trusted-publishers/).
+
+---
+
+## 🔔 Stay up to date
+
+PyreCrawl checks PyPI on every startup and reports the latest version — your
+MCP agent sees this automatically via the `health()` tool response and can
+notify you inline.
+
+To check manually:
+
+```bash
+pyrecrawl version
+```
+
+To upgrade:
+
+```bash
+pyrecrawl update   # runs: uv tool upgrade pyrecrawl
+```
+
+**Get notified of new releases:** click **Watch** → **Releases only** at the
+[GitHub repo](https://github.com/SanggonBoy/PyreCrawl) to receive email
+notifications when a new version is published.
 
 ---
 

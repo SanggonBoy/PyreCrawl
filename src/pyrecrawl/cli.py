@@ -368,7 +368,30 @@ def build_parser() -> argparse.ArgumentParser:
     un = sub.add_parser("uninstall", help="remove our entry from agent configs")
     un.add_argument("agents", nargs="*", help="same names as `install`")
     un.set_defaults(fn=cmd_uninstall)
+
+    up = sub.add_parser("update", help="upgrade to the latest PyPI release (via uv)")
+    up.set_defaults(fn=lambda ns: _cmd_update_wrapper())
+
+    vp = sub.add_parser("version", help="show current vs latest PyPI version")
+    vp.set_defaults(fn=lambda ns: _cmd_version_wrapper())
     return p
+
+
+def _cmd_update_wrapper() -> int:
+    from .updater import cmd_update
+    return cmd_update()
+
+
+def _cmd_version_wrapper() -> int:
+    from .updater import get_latest_version
+    info = get_latest_version()
+    cur, lat = info["current"], info["latest"]
+    print(f"pyrecrawl {cur}")
+    if info["update_available"]:
+        print(f"Latest on PyPI: {lat} — run `pyrecrawl update` to upgrade.")
+        return 1  # shell-friendly exit code
+    print(f"Up to date (latest on PyPI: {lat}).")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
