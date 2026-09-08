@@ -43,6 +43,7 @@ from .engines import (
     search_web,
     batch_scrape,
     deep_research,
+    search_papers,
     session_action,
 )
 
@@ -397,6 +398,31 @@ def build_server() -> FastMCP:
         except Exception as e:  # noqa: BLE001
             log.exception("monitor failed")
             return {"error": str(e), "url": url, "action": action}
+
+    @mcp.tool(name="search_papers")
+    def search_papers_tool(
+        query: str,
+        limit: int = 8,
+        source: str = "arxiv",
+        category: str | None = None,
+    ) -> dict[str, Any]:
+        """Search academic papers via arXiv or Crossref — no API keys.
+
+        Args:
+            query: free-text search, e.g. "transformer attention scaling laws".
+            limit: max results (1-25 arXiv / 1-20 crossref).
+            source: "arxiv" (CS/physics/math preprints, default) or
+                "crossref" (all fields, DOI-backed).
+            category: optional arXiv category filter, e.g. "cs.LG", "cs.CV".
+
+        Returns papers with id/url/pdf_url/title/authors/summary/published.
+        Feed pdf_url into the `document` tool to extract full text.
+        """
+        try:
+            return search_papers(query, limit=limit, source=source, category=category)
+        except Exception as e:  # noqa: BLE001
+            log.exception("search_papers failed")
+            return {"error": str(e), "query": query, "source": source}
 
     @mcp.tool(name="cache")
     def cache_tool(action: str = "stats") -> dict[str, Any]:

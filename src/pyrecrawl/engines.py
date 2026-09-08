@@ -16,6 +16,9 @@ import os
 import queue
 import re
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1607,3 +1610,137 @@ def monitor(
 # ponytail: monitor doesn't honor ETag/Last-Modified yet — when ResponseCache
 # grows conditional GET support, the monitor should reuse it so unchanged
 # pages don't even get a fresh body. Add once cross-process cache ships.
+
+
+# ---------------------------------------------------------------------------
+# search_papers — academic search via arXiv + Crossref (no API keys, no LLM)
+# ---------------------------------------------------------------------------
+
+def _strip_ns(tag: str) -> str:
+    return tag.split("}", 1)[1] if "}" in tag else tag
+
+
+def search_papers(
+    query: str,
+    *,
+    limit: int = 8,
+    source: str = "arxiv",
+    category: str | None = None,
+) -> dict[str, Any]:
+    """Search academic papers — arXiv (CS/physics/math) or Crossref (all fields).
+
+    Plain HTTP against public endpoints via stdlib urllib — Scrapling's HTML
+    normalization corrupts Atom/JSON API payloads, so this path deliberately
+    bypasses the ladder. No API keys, no LLM.
+
+    Args:
+        query: free-text search, e.g. "transformer attention".
+        limit: max results (1-25).
+        source: "arxiv" (default, preprints) or "crossref" (DOI-backed).
+        category: arXiv category filter, e.g. "cs.LG" (arxiv only).
+
+    Returns {papers: [{source, id, url, pdf_url, title, authors, summary,
+    published, categories}], count, query, source, error, elapsed_ms}.
+    """
+    import time
+    import xml.etree.ElementTree as ET
+
+    t0 = time.perf_counter()
+    limit = max(1, min(limit, 25))
+    query = (query or "").strip()
+    if not query:
+        return {"papers": [], "count": 0, "query": query, "source": source,
+                "error": None, "elapsed_ms": 0}
+
+    def _fetch_raw(url: str, timeout: int = 30) -> str:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "PyreCrawl/0.7 (https://github.com/SanggonBoy/PyreCrawl)"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+
+    papers: list[dict[str, Any]] = []
+    err: str | None = None
+    try:
+        if source == "crossref":
+            api = ("https://api.crossref.org/works?query.bibliographic="
+                   + urllib.parse.quote(query)
+                   + f"&rows={min(limit, 20)}&select=DOI,title,author,abstract,issued,URL")
+            items = (json.loads(_fetch_raw(api)).get("message") or {}).get("items", [])
+            for it in items:
+                doi = it.get("DOI")
+                dp = ((it.get("issued") or {}).get("date-parts") or [[]])[0]
+                papers.append({
+                    "source": "crossref",
+                    "id": doi,
+                    "doi": doi,
+                    "url": it.get("URL") or (f"https://doi.org/{doi}" if doi else None),
+                    "pdf_url": None,
+                    "title": (it.get("title") or [""])[0],
+                    "authors": [f"{a.get('given', '')} {a.get('family', '')}".strip()
+                                 for a in (it.get("author") or [])[:12]],
+                    "summary": _strip_tags(it.get("abstract") or "")[:1500],
+                    "published": "-".join(str(p) for p in dp) or None,
+                    "categories": [],
+                })
+        else:  # arxiv (Atom XML)
+            q = query.replace('"', " ").strip()
+            # arXiv interprets space-separated terms as AND across all fields.
+            # Use all:"phrase" only for single-phrase exact queries.
+            phrase = " ".join(q.split())
+            if not phrase:
+                raise ValueError("empty query after cleaning")
+            if len(phrase.split()) > 4:
+                expr = " ".join(f"all:{w}" for w in phrase.split())
+            else:
+                expr = f"all:\"{phrase}\""
+            if category:
+                expr = f"cat:{category} AND ({expr})"
+            api = ("http://export.arxiv.org/api/query?search_query="
+                   + urllib.parse.quote(expr)
+                   + f"&max_results={limit}&sortBy=relevance")
+            root = ET.fromstring(_fetch_raw(api))
+            for entry in root.iter():
+                if _strip_ns(entry.tag) != "entry":
+                    continue
+                fields: dict[str, str] = {}
+                auths: list[str] = []
+                cats: list[str] = []
+                pdf_url = None
+                for child in entry:
+                    tag = _strip_ns(child.tag)
+                    if tag == "author":
+                        nm = child.find("./{http://www.w3.org/2005/Atom}name")
+                        if nm is not None and nm.text:
+                            auths.append(nm.text.strip())
+                    elif tag == "category":
+                        if child.get("term"):
+                            cats.append(child.get("term"))
+                    elif tag == "link":
+                        if child.get("title") == "pdf":
+                            pdf_url = child.get("href")
+                    elif tag in ("id", "title", "summary", "published"):
+                        fields[tag] = (child.text or "").strip()
+                abs_id = fields.get("id", "")
+                papers.append({
+                    "source": "arxiv",
+                    "id": abs_id.rsplit("/", 1)[-1] if abs_id else None,
+                    "doi": None,
+                    "url": abs_id or None,
+                    "pdf_url": pdf_url,
+                    "title": re.sub(r"\s+", " ", fields.get("title", "")),
+                    "authors": auths,
+                    "summary": re.sub(r"\s+", " ", fields.get("summary", ""))[:1500],
+                    "published": fields.get("published") or None,
+                    "categories": cats,
+                })
+    except Exception as e:  # noqa: BLE001
+        err = str(e)
+
+    return {
+        "papers": papers,
+        "count": len(papers),
+        "query": query,
+        "source": source,
+        "error": err,
+        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+    }
