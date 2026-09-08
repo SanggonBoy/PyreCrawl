@@ -1,6 +1,6 @@
 [project]
 name = "pyrecrawl"
-version = "0.5.0"
+version = "0.6.0"
 description = "Web browsing superpowers for AI agents: one MCP tool to scrape, extract, crawl, map, and search any site — self-hosted, no API keys, with a smart auto-fallback ladder."
 readme = "README.md"
 license = { text = "MIT" }
@@ -35,6 +35,11 @@ dev = [
 ]
 browsers = [
     "playwright>=1.40",
+]
+docs = [
+    "pypdf>=5.0",
+    "python-docx>=1.1",
+    "python-pptx>=1.0",
 ]
 
 [project.scripts]

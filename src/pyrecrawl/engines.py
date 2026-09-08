@@ -1022,24 +1022,47 @@ def crawl_site(
     max_pages: int = 5,
     css_selector: str | None = None,
     prefer: str = "auto",
+    include_paths: str | None = None,
+    exclude_paths: str | None = None,
+    max_depth: int = 0,
 ) -> CrawlResult:
     """Discover URLs on `root`, then scrape each through the smart ladder.
+
+    Path filters (regex, matched against the full URL):
+      include_paths — keep only URLs matching
+      exclude_paths — drop URLs matching (applied after include)
+      max_depth     — 0 = flat harvest (map_urls, default); >0 = BFS from
+                      root up to that link depth, honoring the filters
 
     For deep semantic crawling (BFS/DFS with filters), prefer="llm" delegates
     to Crawl4AI's BFSDeepCrawlStrategy.
     """
     import time
+    from urllib.parse import urljoin, urlparse
+
+    inc_re = re.compile(include_paths) if include_paths else None
+    exc_re = re.compile(exclude_paths) if exclude_paths else None
+
+    def _passes(u: str) -> bool:
+        if inc_re and not inc_re.search(u):
+            return False
+        if exc_re and exc_re.search(u):
+            return False
+        return True
 
     if prefer == "llm":
         t0 = time.perf_counter()
         data = process_llm(root, fit_markdown=True, deep_crawl=True, max_pages=max_pages)
         pages: list[FetchResult] = []
         for r in data["results"]:
+            rurl = r.get("url", root)
+            if not _passes(rurl):
+                continue
             html = r.get("html") or r.get("cleaned_html") or ""
             md = r.get("markdown") or {}
             md_text = md.get("raw_markdown") or md.get("fit_markdown") or _html_to_markdown(html) if isinstance(md, dict) else (str(md) if md else _html_to_markdown(html))
             pages.append(FetchResult(
-                url=r.get("url", root),
+                url=rurl,
                 final_url=r.get("redirected_url") or r.get("url"),
                 status=int(r.get("status_code") or 200),
                 html=html,
@@ -1053,21 +1076,164 @@ def crawl_site(
                             elapsed_ms=int((time.perf_counter() - t0) * 1000))
 
     t0 = time.perf_counter()
-    mapped = map_urls(root, limit=max_pages)
-    pages = []
-    for url in mapped.urls[:max_pages]:
-        try:
-            page = scrape_smart(url, prefer=prefer)
-            pages.append(page)
-        except Exception as e:  # noqa: BLE001
-            pages.append(FetchResult(
-                url=url, final_url=url, status=0, html="", markdown="",
-                title=None, method="error", elapsed_ms=0, meta={"error": str(e)},
-            ))
+    root_host = urlparse(root).netloc
+
+    def _internal_links(html: str, base_url: str) -> list[str]:
+        out: list[str] = []
+        for m in re.finditer(r'href=["\']([^"\']+)["\']', html or "", flags=re.IGNORECASE):
+            href = m.group(1).strip()
+            if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+                continue
+            full = urljoin(base_url, href)
+            p = urlparse(full)
+            if p.scheme not in ("http", "https"):
+                continue
+            if root_host and p.netloc != root_host:
+                continue
+            out.append(f"{p.scheme}://{p.netloc}{p.path}" + (f"?{p.query}" if p.query else ""))
+        return out
+
+    pages: list[FetchResult] = []
+    if max_depth and max_depth > 0:
+        # BFS from root up to max_depth link-hops, applying filters + cap
+        visited: set[str] = {root}
+        frontier = [root]
+        depth = 0
+        while frontier and depth <= max_depth and len(pages) < max_pages:
+            nxt: list[str] = []
+            for u in frontier:
+                if len(pages) >= max_pages:
+                    break
+                try:
+                    page = scrape_smart(u, prefer=prefer)
+                    pages.append(page)
+                except Exception as e:  # noqa: BLE001
+                    pages.append(FetchResult(
+                        url=u, final_url=u, status=0, html="", markdown="",
+                        title=None, method="error", elapsed_ms=0, meta={"error": str(e)},
+                    ))
+                    continue
+                if depth < max_depth:
+                    for link in _internal_links(page.html, page.final_url or u):
+                        if link not in visited and _passes(link):
+                            visited.add(link)
+                            nxt.append(link)
+            frontier = nxt
+            depth += 1
+    else:
+        mapped = map_urls(root, limit=max_pages * 4 if (inc_re or exc_re) else max_pages)
+        candidates = [u for u in mapped.urls if _passes(u)][:max_pages]
+        for url in candidates:
+            try:
+                page = scrape_smart(url, prefer=prefer)
+                pages.append(page)
+            except Exception as e:  # noqa: BLE001
+                pages.append(FetchResult(
+                    url=url, final_url=url, status=0, html="", markdown="",
+                    title=None, method="error", elapsed_ms=0, meta={"error": str(e)},
+                ))
     return CrawlResult(
-        root=root, pages=pages, method=mapped.method,
+        root=root, pages=pages, method="bfs" if max_depth else "map+scrape",
         elapsed_ms=int((time.perf_counter() - t0) * 1000),
     )
+
+
+# ---------------------------------------------------------------------------
+# Documents — PDF / DOCX / XLSX → markdown (no browser; lazy imports)
+# ---------------------------------------------------------------------------
+
+def scrape_document(
+    url: str,
+    *,
+    max_pages: int = 50,
+    timeout: int = 60,
+) -> dict[str, Any]:
+    """Extract text from a PDF/DOCX/PPTX into LLM-ready markdown.
+
+    Content-type sniffs the response; routed to pypdf / python-docx /
+    python-pptx (all optional deps). No browser, no JS. Returns
+    {url, doc_type, markdown, pages, elapsed_ms} or {error}.
+    """
+    import io
+    import time
+    t0 = time.perf_counter()
+
+    from urllib.parse import urlparse
+    from scrapling.fetchers import Fetcher
+
+    try:
+        resp = Fetcher.get(url, timeout=timeout)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"download failed: {e}", "url": url}
+
+    body = getattr(resp, "body", None) or getattr(resp, "content", b"") or b""
+    ctype = (getattr(resp, "headers", {}) or {}).get("content-type", "")
+    if isinstance(ctype, bytes):
+        ctype = ctype.decode("latin-1", "replace")
+    ext = urlparse(url).path.lower().rsplit(".", 1)[-1]
+
+    doc_type = ""
+    text = ""
+    n_pages = 0
+
+    if "pdf" in ctype or ext == "pdf" or body[:5] == b"%PDF-":
+        doc_type = "pdf"
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(body))
+            chunks = []
+            for i, p in enumerate(reader.pages):
+                if i >= max_pages:
+                    break
+                chunks.append(p.extract_text() or "")
+                n_pages = i + 1
+            text = "\n\n".join(c for c in chunks if c.strip())
+        except ImportError:
+            return {"error": "pypdf not installed — pip install 'pyrecrawl[docs]' or uv add pypdf", "url": url}
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"pdf parse failed: {e}", "url": url}
+    elif "officedocument.wordprocessingml" in ctype or ext == "docx":
+        doc_type = "docx"
+        try:
+            import docx
+            d = docx.Document(io.BytesIO(body))
+            text = "\n\n".join(p.text for p in d.paragraphs if p.text.strip())
+            for tbl in d.tables:
+                text += "\n\n" + "\n".join(" | ".join(c.text for c in row.cells) for row in tbl.rows)
+            n_pages = len(d.paragraphs)
+        except ImportError:
+            return {"error": "python-docx not installed — pip install 'pyrecrawl[docs]'", "url": url}
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"docx parse failed: {e}", "url": url}
+    elif "presentationml" in ctype or ext == "pptx":
+        doc_type = "pptx"
+        try:
+            from pptx import Presentation
+            prs = Presentation(io.BytesIO(body))
+            slides = []
+            for i, slide in enumerate(prs.slides):
+                if i >= max_pages:
+                    break
+                txts = [sh.text_frame.text for sh in slide.shapes if sh.has_text_frame and sh.text_frame.text.strip()]
+                if txts:
+                    slides.append(f"## Slide {i + 1}\n\n" + "\n\n".join(txts))
+                n_pages = i + 1
+            text = "\n\n".join(slides)
+        except ImportError:
+            return {"error": "python-pptx not installed — pip install 'pyrecrawl[docs]'", "url": url}
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"pptx parse failed: {e}", "url": url}
+    else:
+        return {"error": f"unsupported document type (content-type={ctype!r}, ext={ext!r})", "url": url}
+
+    return {
+        "url": url,
+        "doc_type": doc_type,
+        "markdown": text.strip(),
+        "pages_or_sections": n_pages,
+        "bytes": len(body),
+        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+    }
 
 
 # ---------------------------------------------------------------------------

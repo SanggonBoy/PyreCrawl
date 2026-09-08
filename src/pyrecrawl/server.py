@@ -39,6 +39,7 @@ from .engines import (
     scrape_fast,
     scrape_smart,
     scrape_stealth,
+    scrape_document,
     search_web,
     batch_scrape,
     deep_research,
@@ -223,14 +224,27 @@ def build_server() -> FastMCP:
         max_pages: int = 5,
         css_selector: str | None = None,
         prefer: str = "auto",
+        include_paths: str | None = None,
+        exclude_paths: str | None = None,
+        max_depth: int = 0,
     ) -> dict[str, Any]:
         """Multi-page crawl: discover URLs on `root`, then scrape each.
 
-        prefer="llm" delegates to Crawl4AI's BFS deep-crawl strategy.
-        prefer="auto"/"fast"/"stealth" uses the smart ladder per page.
+        Args:
+            root: start URL.
+            max_pages: hard cap on pages scraped.
+            css_selector: reserved for the llm tier.
+            prefer: "auto" | "fast" | "stealth" | "llm" (llm = Crawl4AI BFS deep-crawl).
+            include_paths: regex — keep only URLs matching (matched against full URL).
+            exclude_paths: regex — drop URLs matching (e.g. `/tag/|/page/\\d+`).
+            max_depth: 0 = flat harvest from the root page's links (default);
+                >0 = true BFS up to that link depth, honoring the filters.
         """
         try:
-            r = crawl_site(root, max_pages=max_pages, css_selector=css_selector, prefer=prefer)
+            r = crawl_site(
+                root, max_pages=max_pages, css_selector=css_selector, prefer=prefer,
+                include_paths=include_paths, exclude_paths=exclude_paths, max_depth=max_depth,
+            )
             return {
                 "root": r.root,
                 "pages": [_scrape_to_dict(p, include_html=False) for p in r.pages],
@@ -241,6 +255,29 @@ def build_server() -> FastMCP:
         except Exception as e:  # noqa: BLE001
             log.exception("crawl failed")
             return {"error": str(e), "root": root}
+
+    @mcp.tool(name="document")
+    def document_tool(
+        url: str,
+        max_pages: int = 50,
+        timeout: int = 60,
+    ) -> dict[str, Any]:
+        """Extract text from a PDF/DOCX/PPTX URL → markdown (no browser).
+
+        Content-type sniffed and routed to pypdf / python-docx / python-pptx.
+        Optional deps — install with `pip install 'pyrecrawl[docs]'`.
+        """
+        try:
+            out = scrape_document(url, max_pages=max_pages, timeout=timeout)
+            md = out.get("markdown") or ""
+            if len(md) > MAX_MD_CHARS:
+                out["markdown"] = md[:MAX_MD_CHARS]
+                out["markdown_truncated"] = True
+                out["markdown_full_chars"] = len(md)
+            return out
+        except Exception as e:  # noqa: BLE001
+            log.exception("document failed")
+            return {"error": str(e), "url": url}
 
     @mcp.tool()
     def search(

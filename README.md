@@ -30,7 +30,8 @@ deep processing (LLM-ready markdown, citations, structured extraction)
 | `scrape(url, prefer="auto")` | Single URL → LLM-ready markdown |
 | `extract(url, schema)` | Scrape + structured extraction (JsonCss schema) |
 | `map_site(root, include_pattern=None, limit=200)` | Enumerate all internal URLs |
-| `crawl(root, max_pages=5, prefer="auto")` | Multi-page crawl with auto-fallback per page |
+| `crawl(root, max_pages=5, prefer="auto", include_paths=None, exclude_paths=None, max_depth=0)` | Multi-page crawl with path filters + true BFS depth |
+| `document(url)` | PDF/DOCX/PPTX → markdown (no browser, optional `[docs]` extras) |
 | `search(query, limit=10)` | Web search via DuckDuckGo HTML (no API key) |
 | `batch_scrape(urls[], ...)` | Many URLs in ONE call — parallel, deduped, cache-aware |
 | `deep_research(query, limit=5, scrape_top=3)` | Search → evidence pack with [n] citations (no LLM synthesis — your agent does that) |
