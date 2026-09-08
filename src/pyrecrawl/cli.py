@@ -264,9 +264,13 @@ def cmd_serve(_: argparse.Namespace) -> int:
 
 def cmd_setup(_: argparse.Namespace) -> int:
     """One-time browser engine install (playwright chromium + scrapling)."""
+    scripts_dir = Path(sys.executable).parent
+    scrapling = scripts_dir / ("scrapling.exe" if os.name == "nt" else "scrapling")
+    if not scrapling.exists():  # venv without the console script — fall back to PATH
+        scrapling = Path(shutil.which("scrapling") or "scrapling")
     steps = [
         [sys.executable, "-m", "playwright", "install", "chromium"],
-        ["scrapling", "install"],
+        [str(scrapling), "install"],
     ]
     for s in steps:
         print(f"$ {' '.join(s)}")
