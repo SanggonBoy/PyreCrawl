@@ -1716,6 +1716,11 @@ def search_papers(
         return {"papers": [], "count": 0, "query": query, "source": source,
                 "error": None, "elapsed_ms": 0}
 
+    if source not in ("arxiv", "crossref"):
+        return {"papers": [], "count": 0, "query": query, "source": source,
+                "error": f"unknown source {source!r}; use 'arxiv' or 'crossref'",
+                "elapsed_ms": 0}
+
     def _fetch_raw(url: str, timeout: int = 30) -> str:
         req = urllib.request.Request(url, headers={
             "User-Agent": "PyreCrawl/0.7 (https://github.com/SanggonBoy/PyreCrawl)"})
@@ -1759,7 +1764,7 @@ def search_papers(
                 expr = f"all:\"{phrase}\""
             if category:
                 expr = f"cat:{category} AND ({expr})"
-            api = ("http://export.arxiv.org/api/query?search_query="
+            api = ("https://export.arxiv.org/api/query?search_query="
                    + urllib.parse.quote(expr)
                    + f"&max_results={limit}&sortBy=relevance")
             root = ET.fromstring(_fetch_raw(api))
