@@ -979,6 +979,61 @@ def _extract_css_schema(html: str, schema: dict[str, Any]) -> list[dict[str, Any
 
 
 # ---------------------------------------------------------------------------
+# Internal link harvest — <a href> only, skipping non-navigable assets
+# ---------------------------------------------------------------------------
+
+# Anchor-scoped: a bare href=... pattern also catches <link rel=stylesheet
+# |canonical|icon|alternate|manifest>, <use>, etc. — none of which are
+# crawlable pages, and each of which burns one slot of the limit quota
+# (and becomes a junk "page" in crawl's flat map+scrape path).
+_ANCHOR_HREF_RE = re.compile(r'<a\b[^>]*?\shref=["\']([^"\']+)["\']', re.IGNORECASE)
+
+# File types that are never pages: styles/scripts, images, fonts, media,
+# archives. Matched against the URL path's final segment only, so query
+# strings don't interfere (/app.js?v=2 is still dropped). Documents
+# (.pdf/.docx/...) are deliberately KEPT — they have their own tool but
+# are still legitimate crawl targets.
+_NON_PAGE_EXTS = frozenset({
+    "css", "js", "mjs", "map",
+    "png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "bmp", "avif", "tiff",
+    "woff", "woff2", "ttf", "otf", "eot",
+    "mp3", "mp4", "webm", "ogg", "wav", "avi", "mov",
+    "zip", "tar", "gz", "rar", "7z",
+})
+
+
+def _is_page_url(parsed: urllib.parse.ParseResult) -> bool:
+    if parsed.scheme not in ("http", "https"):
+        return False
+    leaf = parsed.path.rsplit("/", 1)[-1]
+    if "." in leaf and leaf.rsplit(".", 1)[-1].lower() in _NON_PAGE_EXTS:
+        return False
+    return True
+
+
+def _iter_internal_links(html: str, base_url: str, root_host: str) -> Iterable[str]:
+    """Yield cleaned same-host page URLs from <a href>, in document order.
+
+    Fragments are dropped; query strings are kept. Shared by map_urls
+    and crawl_site so both agree on what counts as a page.
+    """
+    for m in _ANCHOR_HREF_RE.finditer(html or ""):
+        href = m.group(1).strip()
+        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+        full = urllib.parse.urljoin(base_url, href)
+        p = urllib.parse.urlparse(full)
+        if root_host and p.netloc != root_host:
+            continue
+        if not _is_page_url(p):
+            continue
+        clean = f"{p.scheme}://{p.netloc}{p.path}"
+        if p.query:
+            clean += f"?{p.query}"
+        yield clean
+
+
+# ---------------------------------------------------------------------------
 # Map — enumerate URLs
 # ---------------------------------------------------------------------------
 
@@ -988,7 +1043,7 @@ def map_urls(root: str, *, include_pattern: str | None = None, limit: int = 200)
     Uses the fast HTTP path by default; falls back to stealth for CF-protected sites.
     """
     import time
-    from urllib.parse import urljoin, urlparse
+    from urllib.parse import urlparse
 
     t0 = time.perf_counter()
     page = scrape_smart(root, prefer="auto", timeout=30)
@@ -999,22 +1054,9 @@ def map_urls(root: str, *, include_pattern: str | None = None, limit: int = 200)
     base_host = urlparse(page.final_url or root).netloc
     pattern_re = re.compile(include_pattern) if include_pattern else None
     seen: set[str] = set()
-    for m in re.finditer(r'href=["\']([^"\']+)["\']', page.html, flags=re.IGNORECASE):
-        href = m.group(1).strip()
-        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+    for clean in _iter_internal_links(page.html, page.final_url or root, base_host):
+        if pattern_re and not pattern_re.search(clean):
             continue
-        full = urljoin(page.final_url or root, href)
-        parsed = urlparse(full)
-        if parsed.scheme not in ("http", "https"):
-            continue
-        if base_host and parsed.netloc != base_host:
-            continue
-        if pattern_re and not pattern_re.search(full):
-            continue
-        # drop fragment
-        clean = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        if parsed.query:
-            clean += f"?{parsed.query}"
         seen.add(clean)
         if len(seen) >= limit:
             break
@@ -1080,7 +1122,7 @@ def crawl_site(
     to Crawl4AI's BFSDeepCrawlStrategy (max_depth=0 maps to 1 = root + links).
     """
     import time
-    from urllib.parse import urljoin, urlparse
+    from urllib.parse import urlparse
 
     inc_re = re.compile(include_paths) if include_paths else None
     exc_re = re.compile(exclude_paths) if exclude_paths else None
@@ -1123,19 +1165,7 @@ def crawl_site(
     root_host = urlparse(root).netloc
 
     def _internal_links(html: str, base_url: str) -> list[str]:
-        out: list[str] = []
-        for m in re.finditer(r'href=["\']([^"\']+)["\']', html or "", flags=re.IGNORECASE):
-            href = m.group(1).strip()
-            if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
-                continue
-            full = urljoin(base_url, href)
-            p = urlparse(full)
-            if p.scheme not in ("http", "https"):
-                continue
-            if root_host and p.netloc != root_host:
-                continue
-            out.append(f"{p.scheme}://{p.netloc}{p.path}" + (f"?{p.query}" if p.query else ""))
-        return out
+        return list(_iter_internal_links(html, base_url, root_host))
 
     pages: list[FetchResult] = []
     if max_depth and max_depth > 0:
