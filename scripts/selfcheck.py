@@ -45,11 +45,14 @@ def main():
     check("crawl4ai markdown", isinstance(md, dict) and bool(md.get("raw_markdown")))
     check("crawl4ai title in md", "Example" in (md.get("raw_markdown") or ""))
 
-    # 6. FastMCP server builds with all 6 tools
+    # 6. FastMCP server builds with all 13 tools
     srv = build_server()
     names = [t.name for t in srv._tool_manager.list_tools()]
-    for expected in ("scrape", "extract", "map_site", "crawl", "search", "health"):
+    for expected in ("scrape", "extract", "map_site", "crawl", "document", "search",
+                     "batch_scrape", "deep_research", "monitor", "search_papers",
+                     "cache", "health", "session"):
         check(f"tool {expected}", expected in names, str(names))
+    check("tool count == 13", len(names) == 13, str(sorted(names)))
 
     print("\nAll checks passed.")
 

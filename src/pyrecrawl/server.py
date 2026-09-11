@@ -124,7 +124,7 @@ def build_server() -> FastMCP:
         """Scrape a single URL → LLM-ready markdown.
 
         Args:
-            url: Target URL (http/https/file/raw:).
+            url: Target URL (http/https).
             prefer: "auto" | "fast" | "stealth" | "llm".
                     auto = fast first, escalate to stealth on block/short page.
                     fast = cheap HTTP only (no JS).
