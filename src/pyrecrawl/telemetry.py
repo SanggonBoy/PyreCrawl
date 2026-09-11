@@ -29,7 +29,7 @@ from . import __version__ as CURRENT
 log = logging.getLogger("pyrecrawl.telemetry")
 
 # --- Config ---
-ENDPOINT = "https://pyrecrawl-stats.sanggonboy.workers.dev/ping"
+ENDPOINT = "https://pyrecrawl-stats.fajarnugraha90543.workers.dev/ping"
 OPT_OUT_VARS = ("PYRECRAWL_NO_TELEMETRY", "DO_NOT_TRACK")
 CACHE_DIR = Path.home() / ".pyrecrawl"
 LAST_PING_FILE = CACHE_DIR / ".telemetry_ping"

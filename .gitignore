@@ -16,3 +16,9 @@ Thumbs.db
 
 # Hermes temp files
 .hermes-tmp.*/
+
+# telemetry secret (never commit)
+workers/telemetry/.stats-key
+
+# wrangler local state
+workers/telemetry/.wrangler/
