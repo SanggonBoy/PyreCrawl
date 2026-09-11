@@ -241,7 +241,9 @@ def build_server() -> FastMCP:
         Args:
             root: start URL.
             max_pages: hard cap on pages scraped.
-            css_selector: reserved for the llm tier.
+            css_selector: scope each page's html/markdown to the matched element
+                (non-llm: lxml re-scope of the fetched HTML; llm: native crawl4ai
+                css_selector).
             prefer: "auto" | "fast" | "stealth" | "llm" (llm = Crawl4AI BFS deep-crawl).
             include_paths: regex — keep only URLs matching (matched against full URL).
             exclude_paths: regex — drop URLs matching (e.g. `/tag/|/page/\\d+`).

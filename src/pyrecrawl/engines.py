@@ -692,6 +692,7 @@ async def _arun_crawl4ai(
     extraction_strategy: Any | None = None,
     deep_crawl: bool = False,
     max_pages: int = 5,
+    max_depth: int = 2,
     screenshot: bool = False,
 ) -> dict[str, Any]:
     from crawl4ai import (
@@ -726,7 +727,7 @@ async def _arun_crawl4ai(
     if deep_crawl:
         from crawl4ai import BFSDeepCrawlStrategy
         config_kwargs["deep_crawl_strategy"] = BFSDeepCrawlStrategy(
-            max_depth=2,
+            max_depth=max_depth,
             include_external=False,
             max_pages=max_pages,
         )
@@ -787,6 +788,7 @@ def process_llm(
     extraction_strategy: Any | None = None,
     deep_crawl: bool = False,
     max_pages: int = 5,
+    max_depth: int = 2,
 ) -> dict[str, Any]:
     """Sync wrapper around crawl4ai. Returns dict of CrawlResult.model_dump() per page."""
     return _run_coro(_arun_crawl4ai(
@@ -797,6 +799,7 @@ def process_llm(
         extraction_strategy=extraction_strategy,
         deep_crawl=deep_crawl,
         max_pages=max_pages,
+        max_depth=max_depth,
     ))
 
 
@@ -1028,6 +1031,30 @@ def map_urls(root: str, *, include_pattern: str | None = None, limit: int = 200)
 # Crawl — multi-page scrape with optional LLM fit-markdown
 # ---------------------------------------------------------------------------
 
+def _scope_to_selector(r: FetchResult, css_selector: str | None) -> FetchResult:
+    """Re-scope a FetchResult's html/markdown to css_selector (non-LLM tiers).
+
+    Cheap lxml pass over the already-fetched HTML — no second request.
+    Returns r unchanged when no selector or the selector matches nothing.
+    """
+    if not css_selector or not r.html:
+        return r
+    try:
+        from scrapling.parser import Selector
+        nodes = list(Selector(r.html).css(css_selector) or [])
+    except Exception:  # noqa: BLE001 — bad selector etc: keep full page
+        return r
+    if not nodes:
+        return r
+    html = "\n".join(n.html_content for n in nodes)
+    return FetchResult(
+        url=r.url, final_url=r.final_url, status=r.status,
+        html=html, markdown=_html_to_markdown(html), title=r.title,
+        method=r.method, elapsed_ms=r.elapsed_ms,
+        meta={**r.meta, "css_selector": css_selector},
+    )
+
+
 def crawl_site(
     root: str,
     *,
@@ -1045,9 +1072,12 @@ def crawl_site(
       exclude_paths — drop URLs matching (applied after include)
       max_depth     — 0 = flat harvest (map_urls, default); >0 = BFS from
                       root up to that link depth, honoring the filters
+      css_selector  — scope each page's html/markdown to the matched element
+                      (llm tier: native crawl4ai css_selector; other tiers:
+                      lxml re-scope of the fetched HTML, no extra request)
 
     For deep semantic crawling (BFS/DFS with filters), prefer="llm" delegates
-    to Crawl4AI's BFSDeepCrawlStrategy.
+    to Crawl4AI's BFSDeepCrawlStrategy (max_depth=0 maps to 1 = root + links).
     """
     import time
     from urllib.parse import urljoin, urlparse
@@ -1064,7 +1094,9 @@ def crawl_site(
 
     if prefer == "llm":
         t0 = time.perf_counter()
-        data = process_llm(root, fit_markdown=True, deep_crawl=True, max_pages=max_pages)
+        data = process_llm(root, fit_markdown=True, deep_crawl=True,
+                           max_pages=max_pages, css_selector=css_selector,
+                           max_depth=max_depth or 1)
         pages: list[FetchResult] = []
         for r in data["results"]:
             rurl = r.get("url", root)
@@ -1117,8 +1149,8 @@ def crawl_site(
                 if len(pages) >= max_pages:
                     break
                 try:
-                    page = scrape_smart(u, prefer=prefer)
-                    pages.append(page)
+                    raw = scrape_smart(u, prefer=prefer)
+                    pages.append(_scope_to_selector(raw, css_selector))
                 except Exception as e:  # noqa: BLE001
                     pages.append(FetchResult(
                         url=u, final_url=u, status=0, html="", markdown="",
@@ -1126,7 +1158,9 @@ def crawl_site(
                     ))
                     continue
                 if depth < max_depth:
-                    for link in _internal_links(page.html, page.final_url or u):
+                    # discover links on the FULL html — scoping is for stored
+                    # content only, or a nav-scoped selector would starve BFS
+                    for link in _internal_links(raw.html, raw.final_url or u):
                         if link not in visited and _passes(link):
                             visited.add(link)
                             nxt.append(link)
@@ -1137,7 +1171,7 @@ def crawl_site(
         candidates = [u for u in mapped.urls if _passes(u)][:max_pages]
         for url in candidates:
             try:
-                page = scrape_smart(url, prefer=prefer)
+                page = _scope_to_selector(scrape_smart(url, prefer=prefer), css_selector)
                 pages.append(page)
             except Exception as e:  # noqa: BLE001
                 pages.append(FetchResult(
