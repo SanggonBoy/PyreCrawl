@@ -61,6 +61,13 @@ try:
 except Exception:  # noqa: BLE001
     pass  # never break the server over a version check
 
+# --- Anonymous usage ping (opt-out, daemon thread, never blocks startup) ---
+try:
+    from .telemetry import startup_ping as _telemetry_ping
+    _telemetry_ping()
+except Exception:  # noqa: BLE001
+    pass  # telemetry must never break the server
+
 
 SERVER_NAME = "pyrecrawl"
 INSTRUCTIONS = (

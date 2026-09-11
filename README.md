@@ -53,6 +53,7 @@ deep processing (LLM-ready markdown, citations, structured extraction)
 | `PYRECRAWL_CACHE` | off | `1` = in-memory LRU (128 pages), or a directory path (reserved for disk mode) |
 | `PYRECRAWL_CACHE_TTL` | `900` | Cache entry lifetime in seconds |
 | `PYRECRAWL_MONITOR_DIR` | `~/.pyrecrawl/monitors` | Where monitor snapshots persist |
+| `PYRECRAWL_NO_TELEMETRY` | off | `1` = disable the anonymous startup ping (also honors `DO_NOT_TRACK=1`) |
 
 `prefer` options: `"auto"` (default ladder) · `"fast"` (HTTP only) · `"stealth"` (CF bypass) · `"llm"` (deep processing).
 
@@ -317,8 +318,12 @@ scrapling install
 ### Run tests
 
 ```bash
-python scripts/selfcheck.py   # real-network smoke test
-python scripts/probe_stdio.py # stdio JSON-RPC probe
+python scripts/selfcheck.py        # real-network smoke test (13 tools + engines)
+python scripts/probe_stdio.py      # stdio JSON-RPC probe
+python scripts/test_ladder_bug.py  # SPA-shell ladder escalation regression
+python scripts/test_js_eval.py     # stealth js/wait_for params regression
+python scripts/test_scope_selector.py  # crawl css_selector/max_depth wiring
+python scripts/test_link_harvest.py    # map/BFS link purity regression
 ```
 
 ---
@@ -328,8 +333,8 @@ python scripts/probe_stdio.py # stdio JSON-RPC probe
 Maintainers only:
 
 ```bash
-git tag v0.8.0
-git push origin v0.8.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 GitHub Actions builds + uploads to PyPI via [trusted publishing](https://docs.pypi.org/trusted-publishers/).
@@ -357,6 +362,33 @@ pyrecrawl update   # runs: uv tool upgrade pyrecrawl
 **Get notified of new releases:** click **Watch** → **Releases only** at the
 [GitHub repo](https://github.com/SanggonBoy/PyreCrawl) to receive email
 notifications when a new version is published.
+
+---
+
+> [!NOTE]
+> PyreCrawl sends **one anonymous usage ping per 24 h** at server startup — see
+> [Privacy](#-privacy--anonymous-usage-ping) for exactly what's sent and how to opt out.
+
+## 🔒 Privacy — anonymous usage ping
+
+PyreCrawl phones home **once per 24 h** with a tiny anonymous ping when the MCP
+server starts, so we can count real users (DAU/MAU) instead of raw downloads.
+
+| Sent (4 fields, ~100 bytes) | Never sent |
+|---|---|
+| Hashed machine id (SHA-256 of hostname+MAC — not reversible) | Your IP (not stored) |
+| PyreCrawl version | Any URL you scrape |
+| Python version | Any page content or search queries |
+| OS family (`windows` / `linux` / `darwin`) | Anything else |
+
+Client code: [`src/pyrecrawl/telemetry.py`](src/pyrecrawl/telemetry.py) (~90 lines, stdlib only) ·
+Collector: [`workers/telemetry/`](workers/telemetry/) — a self-hostable Cloudflare Worker + D1, no third-party analytics service.
+
+Opt out any time:
+
+```bash
+export PYRECRAWL_NO_TELEMETRY=1   # or the industry-standard DO_NOT_TRACK=1
+```
 
 ---
 
