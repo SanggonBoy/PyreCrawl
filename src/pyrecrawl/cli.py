@@ -119,19 +119,22 @@ def _write_codex(path: Path, command: list[str], args: list[str]) -> str:
     """Codex uses ~/.codex/config.toml — append/replace a [mcp_servers.pyrecrawl] block."""
     block = (
         f"[mcp_servers.{SERVER_NAME}]\n"
-        f'command = "{command[0]}"\n'
+        f"command = {json.dumps(command[0])}\n"
         f"args = [{', '.join(json.dumps(a) for a in args)}]\n"
     )
-    if path.parent.exists() is False:
+    if not path.parent.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     if text:
         backup = path.with_suffix(path.suffix + ".bak")
         if not backup.exists():
             shutil.copy2(path, backup)
-    # drop any previous block of ours
+    # drop any previous block of ours — match to next section header line
+    # (old pattern `[^\[]*` stopped at `[` inside the args array,
+    # leaving an orphan `["--from", ...]` line behind).
     pattern = re.compile(
-        rf"\[mcp_servers\.{SERVER_NAME}\][^\[]*", re.MULTILINE)
+        rf"^\[mcp_servers\.{SERVER_NAME}\][ \t]*\r?\n(?:(?!^\[).*\r?\n?)*",
+        re.MULTILINE)
     if pattern.search(text):
         text = pattern.sub("", text).rstrip() + "\n\n"
     path.write_text((text.rstrip() + "\n\n" if text.strip() else "") + block, encoding="utf-8")
@@ -338,7 +341,11 @@ def cmd_uninstall(ns: argparse.Namespace) -> int:
             else:
                 print(f"  [{name}] not present in {path}")
         elif path.suffix == ".toml":
-            new = re.sub(rf"\[mcp_servers\.{SERVER_NAME}\][^\[]*", "", text)
+            # same block-match rule as _write_codex: to next section header,
+            # not to the next `[` (old pattern orphaned the args array line)
+            new = re.sub(
+                rf"^\[mcp_servers\.{SERVER_NAME}\][ \t]*\r?\n(?:(?!^\[).*\r?\n?)*",
+                "", text, flags=re.MULTILINE)
             path.write_text(new, encoding="utf-8")
             print(f"  [{name}] removed from {path}")
         elif path.suffix in (".yaml", ".yml"):
