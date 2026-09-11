@@ -4,6 +4,9 @@
 [![MCP](https://img.shields.io/badge/MCP-1.0-blue.svg)](https://modelcontextprotocol.io/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![PyPI](https://img.shields.io/pypi/v/pyrecrawl.svg)](https://pypi.org/project/pyrecrawl/)
+[![GitHub stars](https://img.shields.io/github/stars/SanggonBoy/PyreCrawl?logo=github)](https://github.com/SanggonBoy/PyreCrawl/stargazers)
+[![Downloads / 30d](https://img.shields.io/endpoint?url=https%3A%2F%2Fpyrecrawl-stats.fajarnugraha90543.workers.dev%2Fbadge%2Fdownloads)](https://pypistats.org/packages/pyrecrawl)
+[![Active users / 30d](https://img.shields.io/endpoint?url=https%3A%2F%2Fpyrecrawl-stats.fajarnugraha90543.workers.dev%2Fbadge%2Fusers)](https://github.com/SanggonBoy/PyreCrawl#-privacy--anonymous-usage-ping)
 
 **One command gives any AI agent the whole web.** Scrape, extract, crawl, map, and search —
 self-hosted, no API keys, no rate limits, no subscription.

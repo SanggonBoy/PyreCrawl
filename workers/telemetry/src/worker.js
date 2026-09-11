@@ -65,6 +65,30 @@ export default {
       });
     }
 
+    if (url.pathname === "/badge/users" && request.method === "GET") {
+      const now = Math.floor(Date.now() / 1000);
+      const mau = await countSince(env, now - 86400 * 30);
+      return badge("active users / 30d", `${mau}`, "brightgreen");
+    }
+
+    if (url.pathname === "/badge/downloads" && request.method === "GET") {
+      // Sum of "without_mirrors" PyPI downloads over the last 30 days (pypistats.org).
+      const cutoff = new Date(Date.now() - 86400 * 1000 * 30).toISOString().slice(0, 10);
+      try {
+        const r = await fetch("https://pypistats.org/api/packages/pyrecrawl/overall", {
+          headers: { "User-Agent": "pyrecrawl-stats-worker" },
+        });
+        if (r.ok) {
+          const data = await r.json();
+          const total = data.data
+            .filter((d) => d.category === "without_mirrors" && d.date >= cutoff)
+            .reduce((s, d) => s + d.downloads, 0);
+          return badge("downloads / 30d", `${total}`, "orange");
+        }
+      } catch { /* fall through to unknown */ }
+      return badge("downloads / 30d", "unknown", "lightgrey");
+    }
+
     return json({ error: "not found" }, 404);
   },
 };
@@ -81,4 +105,15 @@ function json(obj, status = 200) {
     status,
     headers: { "Content-Type": "application/json", ...CORS },
   });
+}
+
+// shields.io endpoint-badge payload; cached 1 h at the edge so badge churn is low.
+function badge(label, message, color) {
+  return new Response(
+    JSON.stringify({ schemaVersion: 1, label, message, color }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=3600", ...CORS },
+    }
+  );
 }
