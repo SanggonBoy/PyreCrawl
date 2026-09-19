@@ -134,7 +134,25 @@ After installing + registering, **restart your agent** (or start a new session).
 
 > *"Scrape https://example.com and summarize it."*
 
-The tools appear as `mcp_pyrecrawl_scrape`, `mcp_pyrecrawl_extract`, `mcp_pyrecrawl_map_site`, `mcp_pyrecrawl_crawl`, `mcp_pyrecrawl_search`, `mcp_pyrecrawl_health`.
+Available tools:
+
+| Tool | What it does |
+|------|-------------|
+| `scrape` | Fetch a single URL → markdown (auto-escalates past Cloudflare) |
+| `extract` | Scrape + structured extraction via CSS schema → JSON |
+| `map_site` | Enumerate all internal URLs from a root |
+| `crawl` | Multi-page crawl: discover + scrape in bulk |
+| `batch_scrape` | Fetch many URLs in one parallel call |
+| `search` | Web search via DuckDuckGo with anti-bot bypass |
+| `search_papers` | Academic paper search (arXiv / Crossref) |
+| `deep_research` | Search + scrape + citations in one call — **primary research tool** |
+| `document` | Extract text from PDF/DOCX/PPTX URLs |
+| `monitor` | Track a URL for content changes over time |
+| `session` | Persistent browser session for login walls |
+| `cache` | Inspect or clear the response cache |
+| `health` | Verify engine availability + version |
+
+Plus 3 guided prompts: `research`, `rag_ingest`, `watch_page`.
 
 ---
 

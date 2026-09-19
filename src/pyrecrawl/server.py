@@ -158,6 +158,10 @@ def build_server() -> FastMCP:
             wait_for: (stealth only) JS predicate expression polled until truthy
                 (bounded by ``timeout``). Use to wait for content that arrives
                 asynchronously after ``network_idle``.
+
+        Returns:
+            {url, final_url, status, markdown, title, method, elapsed_ms, meta}
+            or {error, url, method} on failure.
         """
         try:
             if prefer == "fast":
@@ -278,6 +282,10 @@ def build_server() -> FastMCP:
             exclude_paths: regex — drop URLs matching (e.g. `/tag/|/page/\\d+`).
             max_depth: 0 = flat harvest from the root page's links (default);
                 >0 = true BFS up to that link depth, honoring the filters.
+
+        Returns:
+            {root, pages: [{url, markdown, title, ...}], count, discovered, elapsed_ms}
+            or {error, root} on failure.
         """
         try:
             r = crawl_site(
@@ -336,6 +344,10 @@ def build_server() -> FastMCP:
 
         Returns [{url, title, snippet}, ...]. The smart ladder bypasses
         DDG's bot detection if needed.
+
+        Returns:
+            {query, results: [{url, title, snippet}], count}
+            or {error, query} on failure.
         """
         try:
             results = search_web(query, limit=limit, prefer=prefer)
@@ -366,6 +378,9 @@ def build_server() -> FastMCP:
 
         Returns {requested, unique, succeeded, failed, results[]}.
         Per-URL failures are isolated — other URLs still succeed.
+
+        Returns:
+            {requested, unique, succeeded, failed, results: [{url, markdown, ...}]}
         """
         from .engines import batch_scrape as _batch
         try:
@@ -404,6 +419,11 @@ def build_server() -> FastMCP:
             limit: how many search results to fetch.
             scrape_top: how many of those to actually fetch content from.
             prefer: "auto" | "fast" | "stealth" | "llm".
+
+        Returns:
+            {query, citations: [{url, title}], evidence: [{url, title, markdown}],
+             scraped, used_engines, elapsed_ms}
+            or {error, query} on failure.
         """
         try:
             r = deep_research(
@@ -446,6 +466,10 @@ def build_server() -> FastMCP:
         ``~/.pyrecrawl/monitors/``). ``check`` returns ``status`` of
         ``new`` | ``unchanged`` | ``changed`` | ``error`` and a unified
         diff when the page changed.
+
+        Returns:
+            {url, status: "new"|"unchanged"|"changed"|"error",
+             diff?: str, snapshot_chars?: int, elapsed_ms?: int}
         """
         try:
             return monitor(url, action=action, prefer=prefer, css_selector=css_selector)
