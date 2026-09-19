@@ -1460,6 +1460,7 @@ def deep_research(
     scrape_top: int = 3,
     prefer: str = "auto",
     max_concurrency: int = 4,
+    iterations: int = 1,
 ) -> dict[str, Any]:
     """Run a web search and pull the top sources as evidence.
 
@@ -1469,6 +1470,10 @@ def deep_research(
       * markdown + title for the top `scrape_top` sources, with
         stable ``[n]`` citation numbers and the mapping in ``citations``.
 
+    When iterations > 1, additional rounds search with refined queries
+    derived from evidence gaps (broader terms, alternate angles) and
+    append results with deduplication by URL.
+
     Args:
         query: search string.
         limit: how many search results to fetch (DDG free tier works fine
@@ -1477,6 +1482,9 @@ def deep_research(
             (bigger = more context but slower).
         prefer: ladder preference, same as ``scrape``.
         max_concurrency: parallel workers for the per-URL scrape.
+        iterations: 1 = single pass (default). 2–3 = multi-pass with
+            refined queries targeting evidence gaps. Each iteration adds
+            up to ``scrape_top`` new sources (deduped by URL).
 
     Returns:
         dict with ``query``, ``hits`` (list), ``evidence`` (list of
@@ -1484,34 +1492,54 @@ def deep_research(
         {n, url, title}), and ``elapsed_ms``.
     """
     t0 = time.perf_counter()
-    hits = search_web(query, limit=limit, prefer=prefer) or []
-    top_urls: list[str] = []
-    seen: set[str] = set()
-    for h in hits:
-        u = h.get("url", "")
-        if u and u not in seen:
-            seen.add(u)
-            top_urls.append(u)
-        if len(top_urls) >= scrape_top:
-            break
-
+    all_hits: list[dict] = []
     evidence: list[dict[str, Any]] = []
-    if top_urls:
-        batched = batch_scrape(
-            top_urls, prefer=prefer,
-            max_concurrency=max_concurrency, use_cache=True,
-        )
-        for i, r in enumerate(batched.get("results", []), start=1):
-            evidence.append({
-                "n": i,
-                "url": r.get("url") or r.get("final_url"),
-                "title": r.get("title"),
-                "status": r.get("status"),
-                "markdown": r.get("markdown", ""),
-                "method": r.get("method"),
-                "elapsed_ms": r.get("elapsed_ms"),
-                "error": r.get("error"),
-            })
+    seen: set[str] = set()
+
+    # Build query variants for multi-pass research.
+    # Pass 1 = original query. Pass 2+ = alternate angles.
+    _VARIANTS = [
+        "{q} comparison alternatives",
+        "{q} problems issues criticism",
+        "{q} latest developments 2024 2025",
+        "{q} explained how it works",
+        "{q} vs competitors benchmarks",
+    ]
+    queries_tried: list[str] = [query]
+
+    for iteration in range(max(1, min(iterations, 3))):
+        q = query if iteration == 0 else _VARIANTS[(iteration - 1) % len(_VARIANTS)].format(q=query)
+        if q not in queries_tried:
+            queries_tried.append(q)
+        hits = search_web(q, limit=limit, prefer=prefer) or []
+        all_hits.extend(hits)
+
+        top_urls: list[str] = []
+        for h in hits:
+            u = h.get("url", "")
+            if u and u not in seen:
+                seen.add(u)
+                top_urls.append(u)
+            if len(top_urls) >= scrape_top:
+                break
+
+        if top_urls:
+            batched = batch_scrape(
+                top_urls, prefer=prefer,
+                max_concurrency=max_concurrency, use_cache=True,
+            )
+            n_offset = len(evidence)
+            for i, r in enumerate(batched.get("results", []), start=n_offset + 1):
+                evidence.append({
+                    "n": i,
+                    "url": r.get("url") or r.get("final_url"),
+                    "title": r.get("title"),
+                    "status": r.get("status"),
+                    "markdown": r.get("markdown", ""),
+                    "method": r.get("method"),
+                    "elapsed_ms": r.get("elapsed_ms"),
+                    "error": r.get("error"),
+                })
 
     citations = [
         {"n": e["n"], "url": e["url"], "title": e["title"]}
@@ -1519,7 +1547,9 @@ def deep_research(
     ]
     return {
         "query": query,
-        "hits": hits,
+        "iterations_run": len(queries_tried),
+        "queries": queries_tried,
+        "hits": all_hits,
         "evidence": evidence,
         "citations": citations,
         "elapsed_ms": int((time.perf_counter() - t0) * 1000),

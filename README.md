@@ -162,6 +162,7 @@ Ask your agent naturally — no special syntax needed:
 |---------|-----------|
 | *"Scrape https://example.com and summarize it"* | `scrape` → returns markdown → agent summarizes |
 | *"Research Rust memory safety vulnerabilities"* | `deep_research` → search + scrape + citations |
+| *"Deep research on AI regulation worldwide"* | `deep_research(iterations=3)` → multi-pass with refined queries |
 | *"Extract all product names and prices from this page"* | `extract` → CSS schema → structured JSON |
 | *"Crawl https://docs.example.com and give me an overview"* | `crawl` → multi-page → summary |
 | *"Monitor this page for price changes"* | `monitor` → baseline snapshot → periodic diff |

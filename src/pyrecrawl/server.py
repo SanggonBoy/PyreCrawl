@@ -81,6 +81,8 @@ INSTRUCTIONS = (
     "Cloudflare bypass. web_extract = static page fetch. pyrecrawl.scrape = JS-heavy / "
     "Cloudflare-protected sites with auto-escalation. pyrecrawl.deep_research = "
     "search + scrape + citations in one call — use for research questions. "
+    "Set iterations=2-3 for multi-pass research (auto-runs refined queries "
+    "targeting alternatives, criticism, latest developments). "
     "LADDER: prefer='auto' (default) escalates fast→stealth→llm automatically. "
     "'fast' = HTTP only. 'stealth' = Chromium + CF solver. 'llm' = Crawl4AI + BM25. "
     "PROMPTS: ask me to 'research <topic>' or 'set up monitoring for <url>' for "
@@ -433,6 +435,7 @@ def build_server() -> FastMCP:
         limit: int = 5,
         scrape_top: int = 3,
         prefer: str = "auto",
+        iterations: int = 1,
     ) -> dict[str, Any]:
         """Search the web, then pull the top sources as EVIDENCE (no LLM synthesis).
 
@@ -441,20 +444,29 @@ def build_server() -> FastMCP:
         list with stable [n] numbers and an ``evidence`` list of per-source
         markdown — the agent does the synthesis from evidence.
 
+        Multi-pass mode: set iterations=2-3 to auto-run additional searches with
+        refined queries (alternatives, criticism, latest developments) and append
+        deduplicated evidence. Each pass adds up to ``scrape_top`` new sources.
+
         Args:
             query: search string.
             limit: how many search results to fetch.
             scrape_top: how many of those to actually fetch content from.
             prefer: "auto" | "fast" | "stealth" | "llm".
+            iterations: 1 (default, single pass), 2-3 (multi-pass with refined
+                queries targeting evidence gaps). Each pass searches from a
+                different angle and deduplicates by URL.
 
         Returns:
-            {query, citations: [{url, title}], evidence: [{url, title, markdown}],
+            {query, iterations_run, queries: [str], hits: [{url, title, snippet}],
+             citations: [{url, title}], evidence: [{url, title, markdown}],
              scraped, used_engines, elapsed_ms}
-            or {error, query} on failure.
+            or {error, query, hint} on failure.
         """
         try:
             r = deep_research(
                 query, limit=limit, scrape_top=scrape_top, prefer=prefer,
+                iterations=iterations,
             )
             # Trim each evidence markdown so a single 200KB page can't blow
             # the response. Full text lives in the agent's tool cache.
@@ -690,18 +702,24 @@ def build_server() -> FastMCP:
         'tell me about X with sources', 'fact check X'.
         """
         return (
-            f"Research the topic: {topic!r} using PyreCrawl tools. "
-            "Rules: cite every claim with the [n] numbers from the evidence pack; "
-            "if evidence conflicts, say so; if a claim is unsupported, mark it "
-            "'needs source'. "
-            + (
-                "Go deeper: run deep_research, then map_site + crawl the best "
-                "domain for full coverage, and extract structured data where a "
-                "schema fits."
-                if depth == "deep" else
-                "Standard pass: deep_research(query, limit=5, scrape_top=3), "
-                "then answer from the evidence."
-            )
+            f"Research the topic: {topic!r} using PyreCrawl tools.\n\n"
+            "MULTI-STEP PROTOCOL:\n"
+            "1) Start with deep_research(query='{topic}', limit=5, scrape_top=3)\n"
+            "2) Read the evidence. Identify GAPS — what aspects are missing or\n"
+            "   where sources conflict?\n"
+            "3) If gaps exist, call deep_research again with a more specific\n"
+            "   follow-up query targeting the gap (e.g. 'X vs Y comparison',\n"
+            "   'X latest developments 2024', 'X criticism problems').\n"
+            "4) Repeat step 2-3 up to 3 total iterations until evidence is\n"
+            "   comprehensive.\n"
+            "5) Synthesize from ALL evidence. Cite every claim with [n] numbers.\n"
+            "   If sources conflict, state the disagreement. If a claim has no\n"
+            "   source, mark it 'needs source'.\n\n"
+            "DEPTH MODES:\n"
+            "- standard: 1-2 iterations, focus on main aspects\n"
+            "- deep: 2-3 iterations, include comparisons, criticism, edge cases.\n"
+            "  Also run map_site + crawl on the best domain for full coverage,\n"
+            "  and extract structured data where a schema fits.\n"
         )
 
     @mcp.prompt()
