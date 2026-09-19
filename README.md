@@ -171,6 +171,34 @@ Ask your agent naturally — no special syntax needed:
 
 ---
 
+## 🧠 Skills — Maximize Your Agent's Research Quality
+
+PyreCrawl tools give your agent **hands** (scrape, crawl, search). But the agent still needs a **brain** — instructions on *when* to use which tool, *how* to chain research passes, and *what* anti-hallucination rules to follow.
+
+That's what **[PyreCrawl Skills](https://github.com/SanggonBoy/pyrecrawl-skills)** provides.
+
+| | MCP Tools (this repo) | Skills ([pyrecrawl-skills](https://github.com/SanggonBoy/pyrecrawl-skills)) |
+|---|---|---|
+| **Role** | Execute web operations | Tell the agent how to use them |
+| **Analogy** | Hands | Brain |
+| **Example** | `deep_research(query, iterations=3)` | "Run 3 passes, check gaps after each, cite everything" |
+| **Required?** | Yes (the engine) | Optional (but recommended for research quality) |
+
+**Quick setup:**
+```bash
+# 1. Install the tools (you already have this)
+uvx pyrecrawl@latest
+
+# 2. Add the research skill to your project
+git clone https://github.com/SanggonBoy/pyrecrawl-skills.git /tmp/pyrecrawl-skills
+cp /tmp/pyrecrawl-skills/pyrecrawl-research/SKILL.md ./CLAUDE.md  # or .cursorrules / AGENTS.md
+```
+
+> **Without skills:** Your agent has powerful tools but improvises usage.
+> **With skills:** Your agent follows a proven research protocol with anti-hallucination guardrails.
+
+---
+
 ## 📚 Manual config (if `pyrecrawl install` doesn't match your setup)
 
 ### Claude Desktop
