@@ -154,6 +154,20 @@ Available tools:
 
 Plus 3 guided prompts: `research`, `rag_ingest`, `watch_page`.
 
+### Quick examples
+
+Ask your agent naturally — no special syntax needed:
+
+| You say | Agent uses |
+|---------|-----------|
+| *"Scrape https://example.com and summarize it"* | `scrape` → returns markdown → agent summarizes |
+| *"Research Rust memory safety vulnerabilities"* | `deep_research` → search + scrape + citations |
+| *"Extract all product names and prices from this page"* | `extract` → CSS schema → structured JSON |
+| *"Crawl https://docs.example.com and give me an overview"* | `crawl` → multi-page → summary |
+| *"Monitor this page for price changes"* | `monitor` → baseline snapshot → periodic diff |
+| *"Find papers about transformer attention"* | `search_papers` → arXiv results |
+| *"What's the current cache hit rate?"* | `cache` → stats |
+
 ---
 
 ## 📚 Manual config (if `pyrecrawl install` doesn't match your setup)

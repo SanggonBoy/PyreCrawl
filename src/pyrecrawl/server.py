@@ -109,6 +109,17 @@ def _trim(result: dict[str, Any], *, include_html: bool = False) -> dict[str, An
     return result
 
 
+def _err(tool: str, e: Exception, url: str = "", *, hint: str = "") -> dict[str, Any]:
+    """Standard error response with a recovery hint for the LLM."""
+    log.exception("%s failed", tool)
+    out: dict[str, Any] = {"error": str(e), "tool": tool}
+    if url:
+        out["url"] = url
+    if hint:
+        out["hint"] = hint
+    return out
+
+
 def _scrape_to_dict(r, *, include_html: bool = False) -> dict[str, Any]:
     out = {
         "url": r.url,
@@ -194,8 +205,11 @@ def build_server() -> FastMCP:
                 r = scrape_smart(url, prefer="auto", timeout=timeout, js=js, wait_for=wait_for)
             return _scrape_to_dict(r, include_html=include_html)
         except Exception as e:  # noqa: BLE001
-            log.exception("scrape failed")
-            return {"error": str(e), "url": url, "method": prefer}
+            return _err("scrape", e, url, hint=(
+                "If blocked by Cloudflare, try prefer='stealth'. "
+                "If the page requires login, use the session tool first. "
+                "For simple static pages, try prefer='fast'."
+            ))
 
     @mcp.tool()
     def extract(
@@ -223,8 +237,10 @@ def build_server() -> FastMCP:
                 "elapsed_ms": r.elapsed_ms,
             }
         except Exception as e:  # noqa: BLE001
-            log.exception("extract failed")
-            return {"error": str(e), "url": url, "schema": schema}
+            return _err("extract", e, url, hint=(
+                "Check that your CSS schema matches the page structure. "
+                "Try scrape first to see the raw markdown and verify selectors."
+            ))
 
     @mcp.tool()
     def map_site(
@@ -252,8 +268,10 @@ def build_server() -> FastMCP:
                 "elapsed_ms": r.elapsed_ms,
             }
         except Exception as e:  # noqa: BLE001
-            log.exception("map failed")
-            return {"error": str(e), "root": root}
+            return _err("map_site", e, root, hint=(
+                "Verify the root URL is reachable. Some sites block automated requests — "
+                "try scrape(root, prefer='stealth') first to check."
+            ))
 
     @mcp.tool()
     def crawl(
@@ -300,8 +318,10 @@ def build_server() -> FastMCP:
                 "elapsed_ms": r.elapsed_ms,
             }
         except Exception as e:  # noqa: BLE001
-            log.exception("crawl failed")
-            return {"error": str(e), "root": root}
+            return _err("crawl", e, root, hint=(
+                "Try reducing max_pages or adding include/exclude filters. "
+                "For single pages, use scrape instead of crawl."
+            ))
 
     @mcp.tool(name="document")
     def document_tool(
@@ -327,8 +347,11 @@ def build_server() -> FastMCP:
                 out["markdown_full_chars"] = len(md)
             return out
         except Exception as e:  # noqa: BLE001
-            log.exception("document failed")
-            return {"error": str(e), "url": url}
+            return _err("document", e, url, hint=(
+                "Ensure the URL points to a PDF/DOCX/PPTX file. "
+                "Some document servers block automated requests — try with prefer='stealth'. "
+                "Install optional deps: pip install 'pyrecrawl[docs]'"
+            ))
 
     @mcp.tool()
     def search(
@@ -353,8 +376,10 @@ def build_server() -> FastMCP:
             results = search_web(query, limit=limit, prefer=prefer)
             return {"query": query, "results": results, "count": len(results)}
         except Exception as e:  # noqa: BLE001
-            log.exception("search failed")
-            return {"error": str(e), "query": query}
+            return _err("search", e, hint=(
+                "DuckDuckGo may be blocking automated requests. "
+                "For research questions, try deep_research instead (search + scrape in one call)."
+            ))
 
     @mcp.tool(name="batch_scrape")
     def batch_scrape_tool(
@@ -397,8 +422,10 @@ def build_server() -> FastMCP:
                     r["markdown_full_chars"] = md_len
             return out
         except Exception as e:  # noqa: BLE001
-            log.exception("batch_scrape failed")
-            return {"error": str(e), "urls": urls}
+            return _err("batch_scrape", e, hint=(
+                "If many URLs failed, try reducing max_concurrency or increasing timeout. "
+                "Per-URL failures are isolated — check which URLs in results[] succeeded."
+            ))
 
     @mcp.tool(name="deep_research")
     def deep_research_tool(
@@ -439,8 +466,11 @@ def build_server() -> FastMCP:
                     ev["markdown_full_chars"] = len(md)
             return r
         except Exception as e:  # noqa: BLE001
-            log.exception("deep_research failed")
-            return {"error": str(e), "query": query}
+            return _err("deep_research", e, hint=(
+                "Try a simpler query or increase timeout. "
+                "If search fails, try search_papers for academic sources. "
+                "Reduce scrape_top to fetch fewer pages."
+            ))
 
     @mcp.tool(name="monitor")
     def monitor_tool(
@@ -474,8 +504,10 @@ def build_server() -> FastMCP:
         try:
             return monitor(url, action=action, prefer=prefer, css_selector=css_selector)
         except Exception as e:  # noqa: BLE001
-            log.exception("monitor failed")
-            return {"error": str(e), "url": url, "action": action}
+            return _err("monitor", e, url, hint=(
+                "Verify the URL is reachable. Some sites require login — "
+                "use the session tool first to authenticate, then monitor."
+            ))
 
     @mcp.tool(name="search_papers")
     def search_papers_tool(
@@ -495,19 +527,28 @@ def build_server() -> FastMCP:
 
         Returns papers with id/url/pdf_url/title/authors/summary/published.
         Feed pdf_url into the `document` tool to extract full text.
+
+        Returns:
+            {query, source, papers: [{title, authors, abstract, url, pdf_url?, ...}]}
+            or {error, query} on failure.
         """
         try:
             return search_papers(query, limit=limit, source=source, category=category)
         except Exception as e:  # noqa: BLE001
-            log.exception("search_papers failed")
-            return {"error": str(e), "query": query, "source": source}
+            return _err("search_papers", e, hint=(
+                "Check query spelling. Try source='crossref' if arXiv returns no results. "
+                "Use pdf_url from results with the document tool to extract full text."
+            ))
 
     @mcp.tool(name="cache")
     def cache_tool(action: str = "stats") -> dict[str, Any]:
-        """Inspect the response cache: stats or clear.
+        """Inspect the response cache: stats, clear, enable, or disable.
+
+        Use this to check cache hit rates before large batch jobs, or to
+        clear stale cached responses when a site's content has changed.
 
         Args:
-            action: "stats" | "clear" | "disable" | "enable".
+            action: "stats" (default) | "clear" | "disable" | "enable".
         """
         try:
             if action == "clear":
@@ -527,7 +568,11 @@ def build_server() -> FastMCP:
 
     @mcp.tool()
     def health() -> dict[str, Any]:
-        """Sanity check: verify engines are importable + return versions."""
+        """Verify PyreCrawl is working: engine versions, dependencies, update status.
+
+        Use this at the start of a session or before a large scraping job to
+        confirm all engines are installed and up to date.
+        """
         info: dict[str, Any] = {"server": SERVER_NAME}
         for pkg in ("crawl4ai", "scrapling", "mcp"):
             try:
@@ -592,8 +637,10 @@ def build_server() -> FastMCP:
                 headless=headless,
             )
         except Exception as e:  # noqa: BLE001
-            log.exception("session action failed")
-            return {"error": str(e), "session": session, "action": action}
+            return _err("session", e, hint=(
+                "Ensure the page is loaded with 'open' action before interacting. "
+                "Try 'content' action to check current page state."
+            ))
 
     # -----------------------------------------------------------------------
     # MCP Resources — cheap read-only state, no tool round-trip needed
