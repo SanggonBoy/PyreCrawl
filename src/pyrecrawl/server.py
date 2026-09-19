@@ -71,11 +71,20 @@ except Exception:  # noqa: BLE001
 
 SERVER_NAME = "pyrecrawl"
 INSTRUCTIONS = (
-    "PyreCrawl — self-hosted Firecrawl alternative. Combines Scrapling (fast HTTP / "
-    "stealth browser) and Crawl4AI (BM25 fit-markdown, deep crawl, structured "
-    "extraction) with a smart auto-fallback ladder. All tools return LLM-ready "
-    "markdown. Prefer 'auto' for the default ladder; 'fast' for cheap static pages; "
-    "'stealth' for Cloudflare; 'llm' for full browser rendering + BM25 / extraction."
+    "PyreCrawl — web scraping, crawling, and research toolkit. "
+    "USE pyrecrawl when: user shares a URL to read or analyze, asks to research / "
+    "investigate / deep-dive into a topic, needs content from web pages, wants to "
+    "monitor a page for changes, or asks to crawl/scrape a site. "
+    "DO NOT use for simple one-line searches (use built-in web_search instead) or "
+    "API calls (use built-in web_extract for simple static pages). "
+    "ROUTING: web_search = quick search, no anti-bot. pyrecrawl.search = search with "
+    "Cloudflare bypass. web_extract = static page fetch. pyrecrawl.scrape = JS-heavy / "
+    "Cloudflare-protected sites with auto-escalation. pyrecrawl.deep_research = "
+    "search + scrape + citations in one call — use for research questions. "
+    "LADDER: prefer='auto' (default) escalates fast→stealth→llm automatically. "
+    "'fast' = HTTP only. 'stealth' = Chromium + CF solver. 'llm' = Crawl4AI + BM25. "
+    "PROMPTS: ask me to 'research <topic>' or 'set up monitoring for <url>' for "
+    "guided playbooks with step-by-step instructions."
 )
 
 
@@ -129,6 +138,9 @@ def build_server() -> FastMCP:
         wait_for: str | None = None,
     ) -> dict[str, Any]:
         """Scrape a single URL → LLM-ready markdown.
+
+        Use this when the user shares a URL and wants its content (read, analyze,
+        summarize, extract). Auto-escalates through fast→stealth→llm when blocked.
 
         Args:
             url: Target URL (http/https).
@@ -189,6 +201,9 @@ def build_server() -> FastMCP:
     ) -> dict[str, Any]:
         """Scrape + structured extraction using a CSS-based JSON schema.
 
+        Use when the user wants structured data (tables, lists, product info)
+        extracted from a page. Define a CSS schema to target specific elements.
+
         The schema is a JsonCssExtractionStrategy schema:
           { "name": "PageItems", "baseSelector": "div.item",
             "fields": [{"name": "title", "selector": "h2", "type": "text"}, ...] }
@@ -214,6 +229,9 @@ def build_server() -> FastMCP:
         limit: int = 200,
     ) -> dict[str, Any]:
         """Enumerate all internal URLs reachable from `root`.
+
+        Use when the user wants to map a site's structure or find all pages
+        before crawling. Often paired with `crawl` or `batch_scrape`.
 
         Args:
             root: Website root (e.g. "https://example.com/docs").
@@ -244,6 +262,10 @@ def build_server() -> FastMCP:
         max_depth: int = 0,
     ) -> dict[str, Any]:
         """Multi-page crawl: discover URLs on `root`, then scrape each.
+
+        Use this when the user wants to crawl an entire site section or docs,
+        or needs multiple pages scraped in bulk. For single pages use `scrape`;
+        for research questions use `deep_research`.
 
         Args:
             root: start URL.
@@ -281,6 +303,10 @@ def build_server() -> FastMCP:
     ) -> dict[str, Any]:
         """Extract text from a PDF/DOCX/PPTX URL → markdown (no browser).
 
+        Use when the user shares a link to a document (PDF, Word, PowerPoint)
+        and wants its text content. Also useful after `search_papers` to get
+        full text from a paper's pdf_url.
+
         Content-type sniffed and routed to pypdf / python-docx / python-pptx.
         Optional deps — install with `pip install 'pyrecrawl[docs]'`.
         """
@@ -304,6 +330,10 @@ def build_server() -> FastMCP:
     ) -> dict[str, Any]:
         """Web search via DuckDuckGo HTML (no API key required).
 
+        Use this for targeted searches where you need anti-bot bypass (Cloudflare
+        protection on DDG). For simple searches, the built-in web_search may suffice.
+        For research questions, prefer `deep_research` (search + scrape + citations).
+
         Returns [{url, title, snippet}, ...]. The smart ladder bypasses
         DDG's bot detection if needed.
         """
@@ -323,6 +353,9 @@ def build_server() -> FastMCP:
         include_html: bool = False,
     ) -> dict[str, Any]:
         """Scrape MANY URLs in ONE call (parallel, deduped, cache-aware).
+
+        Use when the user provides multiple URLs or you have a list of pages
+        to fetch. More efficient than calling `scrape` N times.
 
         Args:
             urls: Target URLs (deduped automatically; empties dropped).
@@ -361,9 +394,10 @@ def build_server() -> FastMCP:
     ) -> dict[str, Any]:
         """Search the web, then pull the top sources as EVIDENCE (no LLM synthesis).
 
-        Returns a ``citations`` list with stable [n] numbers and an
-        ``evidence`` list of per-source markdown — the agent does the
-        synthesis. Designed for research, RAG prep, and fact-checking.
+        PRIMARY RESEARCH TOOL — use when the user asks to research, investigate,
+        deep-dive, fact-check, or learn about a topic. Returns a ``citations``
+        list with stable [n] numbers and an ``evidence`` list of per-source
+        markdown — the agent does the synthesis from evidence.
 
         Args:
             query: search string.
@@ -396,6 +430,10 @@ def build_server() -> FastMCP:
         css_selector: str | None = None,
     ) -> dict[str, Any]:
         """Track a URL over time and report meaningful content changes.
+
+        Use when the user wants to watch a page for updates (price changes,
+        new blog posts, status updates). Ask me to 'set up monitoring for <url>'
+        for a guided setup playbook.
 
         Args:
             url: target URL.
@@ -500,9 +538,12 @@ def build_server() -> FastMCP:
     ) -> dict[str, Any]:
         """Drive a persistent browser session — cookies & JS state kept across calls.
 
-        Use for login walls and multi-step flows the ladder can't handle
-        (one-shot scrape has no session memory; here each action runs
-        against the same live page).
+        Use for login walls and multi-step flows the one-shot ladder can't handle
+        (e.g. user needs to log in first, then scrape a protected page).
+        For simple pages use `scrape`; for research use `deep_research`.
+
+        One-shot scrape has no session memory; here each action runs
+        against the same live page.
 
         Args:
             session: named session; reuse the same name to keep state.
@@ -572,7 +613,11 @@ def build_server() -> FastMCP:
 
     @mcp.prompt()
     def research(topic: str, depth: str = "standard") -> str:
-        """Playbook: evidence-first research of a topic using PyreCrawl."""
+        """Playbook: evidence-first research on any topic using PyreCrawl tools.
+
+        Trigger phrases: 'research X', 'investigate X', 'deep dive into X',
+        'tell me about X with sources', 'fact check X'.
+        """
         return (
             f"Research the topic: {topic!r} using PyreCrawl tools. "
             "Rules: cite every claim with the [n] numbers from the evidence pack; "
@@ -590,7 +635,11 @@ def build_server() -> FastMCP:
 
     @mcp.prompt()
     def rag_ingest(site: str, max_pages: str = "10") -> str:
-        """Playbook: turn a site into clean markdown for a RAG index."""
+        """Playbook: turn a site into clean markdown for a RAG index.
+
+        Trigger phrases: 'prepare site for RAG', 'ingest site into index',
+        'crawl site for knowledge base'.
+        """
         return (
             f"Prepare {site!r} for RAG ingestion with PyreCrawl: "
             f"1) map_site(root='{site}') to enumerate internal URLs (limit {max_pages} "
@@ -604,7 +653,11 @@ def build_server() -> FastMCP:
 
     @mcp.prompt()
     def watch_page(url: str, goal: str = "material changes only") -> str:
-        """Playbook: set up change watching on a page with a sensible baseline."""
+        """Playbook: set up change watching on a page with a sensible baseline.
+
+        Trigger phrases: 'monitor this page', 'watch for changes on URL',
+        'notify me when this updates', 'track this URL'.
+        """
         return (
             f"Set up monitoring for {url!r} (goal: {goal}). Steps: "
             f"1) monitor(url='{url}', action='check') twice — the first call "
