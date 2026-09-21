@@ -1319,27 +1319,46 @@ def scrape_document(
 def search_web(query: str, *, limit: int = 10, prefer: str = "auto") -> list[dict[str, Any]]:
     """Search DuckDuckGo and return top `limit` organic results.
 
-    Strategy: try the fast html. endpoint first; on bot-interstitial
-    (DuckDuckGo flags datacenter IPs) the smart ladder auto-escalates to
-    the stealth browser against the lighter lite. endpoint, whose
-    markup is also parsed.
+    Strategy: try both DDG endpoints over plain HTTP first (html., then
+    lite.). Only when both come back bot-walled (DuckDuckGo flags
+    datacenter IPs) does the ladder escalate to the stealth browser
+    against the lighter lite. endpoint. Keeping search off the browser
+    path is what keeps deep_research under MCP request timeouts.
     """
     from urllib.parse import quote_plus, unquote
 
     q = quote_plus(query)
 
-    # Attempt 1: html. endpoint via ladder (fast path works on residential IPs)
+    # Attempt 1: html. endpoint over plain HTTP (works on residential IPs).
+    # No stealth escalation here: when DDG IP-walls this endpoint, a browser
+    # round-trip hits the same wall — the lite. attempts below are the right
+    # escalation, and they are orders of magnitude cheaper.
     url_html = f"https://html.duckduckgo.com/html/?q={q}"
     try:
-        page = scrape_smart(url_html, prefer=prefer, timeout=30)
+        page = scrape_smart(url_html, prefer="fast" if prefer == "auto" else prefer, timeout=30)
         results = _parse_ddg_html(page.html, limit)
         if results:
             return results
     except Exception:  # noqa: BLE001
-        pass
+        page = None
 
-    # Attempt 2: lite. endpoint — lighter markup, usually passes with stealth
+    # Attempt 2: lite. endpoint, still plain HTTP — lighter markup that
+    # usually serves fine without a browser.
     url_lite = f"https://lite.duckduckgo.com/lite/?q={q}"
+    if prefer != "stealth":
+        try:
+            page = scrape_smart(url_lite, prefer="fast", timeout=30)
+            results = _parse_ddg_lite(page.html, limit)
+            if results:
+                return results
+            # lite. sometimes serves the html. result markup instead
+            results = _parse_ddg_html(page.html, limit)
+            if results:
+                return results
+        except Exception:  # noqa: BLE001
+            page = None
+
+    # Attempt 3 (last resort): stealth browser against the lighter lite. endpoint
     page = scrape_smart(url_lite, prefer="stealth" if prefer == "auto" else prefer, timeout=60)
     results = _parse_ddg_lite(page.html, limit)
     if results:
